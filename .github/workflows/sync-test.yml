@@ -1,0 +1,36 @@
+name: sync-test
+
+# Publish the test-device list to the droplet so devices know their channel: a device whose code is
+# in this list shows RC builds in its picker; everyone else (prod) sees only released versions.
+# Source of truth = the FLEET_GROUPS repo variable's "test" array. The server file is OVERWRITTEN
+# from it each run (remove a code from FLEET_GROUPS + re-run -> that device drops back to prod).
+# Run: Actions -> sync-test -> Run workflow   (or: gh workflow run sync-test)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write test-devices.json from FLEET_GROUPS
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET: ${{ secrets.DROPLET_HOST }}
+          FLEET_GROUPS: ${{ vars.FLEET_GROUPS }}
+        run: |
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then echo "::error::set DEPLOY_SSH_KEY + DROPLET_HOST"; exit 1; fi
+          if [ -z "${FLEET_GROUPS:-}" ]; then echo "::error::set the FLEET_GROUPS variable (with a 'test' list)"; exit 1; fi
+          # {"test":[...]} with codes uppercased to match the device's friend code
+          echo "$FLEET_GROUPS" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps({"test":[str(c).upper() for c in d.get("test",[])]}))' > test-devices.json
+          echo "publishing:"; cat test-devices.json
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519; chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${DROPLET##*@}" >> ~/.ssh/known_hosts 2>/dev/null
+          DIR=/var/www/planepuck-fw/planepuck
+          ssh "$DROPLET" "mkdir -p $DIR"
+          scp test-devices.json "$DROPLET:$DIR/test-devices.json.tmp"
+          ssh "$DROPLET" "chmod 644 $DIR/test-devices.json.tmp && mv $DIR/test-devices.json.tmp $DIR/test-devices.json"
+          echo "synced test-devices.json (overwritten from FLEET_GROUPS.test)"

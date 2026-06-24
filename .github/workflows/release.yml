@@ -1,0 +1,203 @@
+name: release
+
+# Two ways in:
+#  - push a fw-v<N> (or fw-v<N>-rc<M>) tag — what tools/release.sh does locally.
+#  - Actions -> release -> "Run workflow" (workflow_dispatch): cut + build from the UI with no local
+#    shell. On dispatch this runs tools/release.sh on the runner to bump version.h + commit + tag +
+#    push (one source of version logic), then builds/publishes the same job. (A tag pushed by CI's
+#    GITHUB_TOKEN won't re-trigger this workflow — which is why dispatch builds inline instead.)
+# Builds with secrets from the Actions vault; config.h is reconstructed from config.h.example + secrets.
+on:
+  push:
+    tags:
+      - 'fw-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version integer (blank = latest final tag + 1)'
+        required: false
+      rc:
+        description: 'Release candidate — staged: publish the bin only, do NOT promote the fleet'
+        type: boolean
+        default: false
+      notes:
+        description: 'Release notes'
+        required: false
+
+permissions:
+  contents: write          # dispatch pushes the version.h bump + tag
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                 # need full tag history for release.sh's auto-bump
+          ref: ${{ github.ref_name }}    # attach to the branch (not detached) so dispatch can push the bump
+
+      - name: Cut tag (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          ARGS=()
+          [ "${{ inputs.rc }}" = "true" ] && ARGS+=(rc)
+          [ -n "${{ inputs.version }}" ] && ARGS+=("${{ inputs.version }}")
+          ARGS+=("${{ inputs.notes }}")
+          tools/release.sh "${ARGS[@]}"        # bump version.h + commit + tag + push (won't re-trigger CI)
+
+      - name: Derive version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            N=$(sed -nE 's/^#define[[:space:]]+FW_VERSION[[:space:]]+([0-9]+).*/\1/p' src/version.h)
+            RC=0; [ "${{ inputs.rc }}" = "true" ] && RC=1
+          else
+            T="${GITHUB_REF_NAME#fw-v}"; N="${T%%-rc*}"   # "18" (final) or "18-rc1" (candidate)
+            RC=0; [ "$T" != "$N" ] && RC=1
+          fi
+          echo "n=$N"   >> "$GITHUB_OUTPUT"
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+          echo "build v$N (rc=$RC)"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache PlatformIO + pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Write config.h (example + vault secrets)
+        env:
+          OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
+          OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
+          ENROLL_TOKEN: ${{ secrets.ENROLL_TOKEN }}
+          FW_HOST: ${{ secrets.FW_HOST }}      # firmware/HTTPS host (OTA + enroll URLs); kept out of tracked source
+          MQTT_HOST: ${{ secrets.MQTT_HOST }}  # broker domain
+        run: |
+          [ -z "${OPENSKY_CLIENT_SECRET:-}" ] && echo "::warning::OPENSKY_CLIENT_SECRET not set — flight routes will show 'route unknown' in this build."
+          [ -z "${FW_HOST:-}" ]   && echo "::warning::FW_HOST secret not set — OTA/enroll URLs will be blank (OTA effectively off in this build)."
+          [ -z "${MQTT_HOST:-}" ] && echo "::warning::MQTT_HOST secret not set — MQTT off in this build (no friends/fleet messaging)."
+          cp src/config.h.example src/config.h
+          # Fill the host placeholders from secrets so the real hosts never live in the tracked source.
+          sed -i "s|__FW_HOST__|${FW_HOST}|g; s|__MQTT_HOST__|${MQTT_HOST}|g" src/config.h
+          sed -i "s|#define OPENSKY_CLIENT_ID .*|#define OPENSKY_CLIENT_ID \"${OPENSKY_CLIENT_ID}\"|" src/config.h
+          sed -i "s|#define OPENSKY_CLIENT_SECRET .*|#define OPENSKY_CLIENT_SECRET \"${OPENSKY_CLIENT_SECRET}\"|" src/config.h
+          # Zero-touch MQTT enrollment: enable only when the token secret is present; must match the
+          # token configured on the enroll server. Use hex tokens (openssl rand -hex 32) — sed-safe.
+          if [ -n "${ENROLL_TOKEN:-}" ]; then
+            sed -i "s|#define ENROLL_URL .*|#define ENROLL_URL \"https://${FW_HOST}/enroll\"|" src/config.h
+            sed -i "s|#define ENROLL_TOKEN .*|#define ENROLL_TOKEN \"${ENROLL_TOKEN}\"|" src/config.h
+            echo "enroll: enabled"
+          else
+            echo "::warning::ENROLL_TOKEN not set — zero-touch enrollment disabled in this build (pucks will need the MQTT password typed in Settings)."
+          fi
+          echo "config.h written (secrets injected, not echoed)"
+
+      - name: Build firmware
+        run: pio run -e m5stack-cores3
+
+      - name: Build full-flash (merged) image for the web installer
+        if: steps.ver.outputs.rc != '1'        # RC doesn't touch the first-burn installer
+        run: |
+          pip install --quiet esptool
+          BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          B=.pio/build/m5stack-cores3
+          python -m esptool --chip esp32s3 merge_bin --flash_size 16MB -o planepuck-merged.bin \
+            0x0 "$B/bootloader.bin" \
+            0x8000 "$B/partitions.bin" \
+            0xe000 "$BOOT_APP0" \
+            0x10000 "$B/firmware.bin"
+          ls -l planepuck-merged.bin
+
+      - name: Publish firmware + manifest to droplet
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET: ${{ secrets.DROPLET_HOST }}     # e.g. root@<your-fw-host>  (or root@<ip>)
+          FW_HOST: ${{ secrets.FW_HOST }}          # firmware host for the published version.json URL
+          N: ${{ steps.ver.outputs.n }}
+          RC: ${{ steps.ver.outputs.rc }}          # "1" = candidate: publish the bin only, don't promote
+          OTA_MIN_VERSION: ${{ vars.OTA_MIN_VERSION }}   # picker floor (blank -> 1)
+        run: |
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then
+            echo "::error::Missing secrets — set DEPLOY_SSH_KEY and DROPLET_HOST (repo Settings -> Secrets and variables -> Actions), then re-run this job."; exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${DROPLET##*@}" >> ~/.ssh/known_hosts 2>/dev/null
+          DIR=/var/www/planepuck-fw/planepuck
+          BIN=.pio/build/m5stack-cores3/firmware.bin
+          NOTES="$(git log -1 --pretty=%s | tr -d '"\\')"   # strip quotes/backslashes -> safe JSON
+          ROOT=/var/www/planepuck-fw
+          ssh "$DROPLET" "mkdir -p $DIR && chmod 755 $ROOT $DIR"
+          # ALWAYS: the versioned OTA image + the installable-versions list (so an RC is testable via
+          # the on-device picker / `fleet.py send <code> N` without being offered to the whole fleet).
+          scp "$BIN" "$DROPLET:$DIR/firmware-v$N.bin"
+          ssh "$DROPLET" "chmod 644 $DIR/firmware-v$N.bin"
+          VERS=$(ssh "$DROPLET" "cd $DIR && ls firmware-v*.bin 2>/dev/null | sed -E 's@firmware-v([0-9]+)\\.bin@\\1@' | sort -n | paste -sd, -")
+          # released = versions with a final (non-rc) tag -> what prod devices may pick; min = picker floor.
+          RELEASED=$(git tag --list 'fw-v*' | sed -nE 's/^fw-v([0-9]+)$/\1/p' | sort -n | paste -sd, -)
+          LATEST=$(git tag --list 'fw-v*' | sed -nE 's/^fw-v([0-9]+)$/\1/p' | sort -n | tail -1)
+          printf '{ "versions": [%s], "released": [%s], "latest": %s, "min": %s }\n' \
+                 "$VERS" "$RELEASED" "${LATEST:-0}" "${OTA_MIN_VERSION:-1}" > versions.json
+          scp versions.json "$DROPLET:$DIR/versions.json.tmp"
+          ssh "$DROPLET" "chmod 644 $DIR/versions.json.tmp && mv $DIR/versions.json.tmp $DIR/versions.json"
+          echo "published firmware-v$N.bin; versions.json now [$VERS]"
+          if [ "$RC" = "1" ]; then
+            echo "RC build: published the bin + versions.json only — fleet version.json/manifest unchanged."
+            exit 0
+          fi
+          # FINAL only — promote to the fleet: the polled manifest, the first-burn installer, the push.
+          printf '{ "version": %s, "url": "https://%s/planepuck/firmware-v%s.bin", "notes": "%s" }\n' "$N" "$FW_HOST" "$N" "$NOTES" > version.json
+          scp version.json "$DROPLET:$DIR/version.json.tmp"
+          ssh "$DROPLET" "chmod 644 $DIR/version.json.tmp && mv $DIR/version.json.tmp $DIR/version.json"
+          scp planepuck-merged.bin "$DROPLET:$DIR/planepuck-merged.bin.tmp"
+          ssh "$DROPLET" "chmod 644 $DIR/planepuck-merged.bin.tmp && mv $DIR/planepuck-merged.bin.tmp $DIR/planepuck-merged.bin"
+          printf '{ "name": "PlanePuck", "version": "%s", "new_install_prompt_erase": false, "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "planepuck-merged.bin", "offset": 0 } ] } ] }\n' "$N" > manifest.json
+          scp manifest.json "$DROPLET:$DIR/manifest.json.tmp"
+          ssh "$DROPLET" "chmod 644 $DIR/manifest.json.tmp && mv $DIR/manifest.json.tmp $DIR/manifest.json"
+          scp tools/webinstall/index.html "$DROPLET:$ROOT/index.html.tmp"
+          ssh "$DROPLET" "chmod 644 $ROOT/index.html.tmp && mv $ROOT/index.html.tmp $ROOT/index.html"
+          echo "promoted v$N: version.json + merged image + install page"
+
+      - name: Push RC to the 'test' group
+        if: steps.ver.outputs.rc == '1'        # a candidate auto-deploys to test devices (only)
+        env:
+          FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          FLEET_GROUPS: ${{ vars.FLEET_GROUPS }}     # repo variable: {"test":["<code>",...]}
+          MQTT_HOST: ${{ secrets.MQTT_HOST }}        # broker domain (kept out of tracked source)
+          N: ${{ steps.ver.outputs.n }}
+        run: |
+          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_GROUPS:-}" ] || [ -z "${MQTT_HOST:-}" ]; then
+            echo "::warning::RC published but NOT auto-pushed — set MQTT_OPERATOR_* + MQTT_HOST secrets + the FLEET_GROUPS variable (with a 'test' list). Install manually: tools/fleet.py send <code> $N --force"; exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+          FLEET_HOST="$MQTT_HOST" FLEET_PORT=8883 python3 tools/fleet.py send test "$N" --force \
+            || echo "::warning::auto-push to 'test' failed (group empty, or all test devices offline) — RC is still installable via fleet.py / the on-device picker"
+
+      - name: MQTT push (optional instant nudge)
+        if: steps.ver.outputs.rc != '1'        # never broadcast a candidate to the fleet
+        env:
+          MQTT_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          MQTT_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          MQTT_HOST: ${{ secrets.MQTT_HOST }}
+          N: ${{ steps.ver.outputs.n }}
+        run: |
+          if [ -z "${MQTT_PASS:-}" ] || [ -z "${MQTT_HOST:-}" ]; then
+            echo "no MQTT_OPERATOR_PASS / MQTT_HOST secret set — skipping push (pucks poll within OTA_POLL_HOURS)"; exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+          mosquitto_pub -h "$MQTT_HOST" -p 8883 --cafile /etc/ssl/certs/ca-certificates.crt \
+            -u "$MQTT_USER" -P "$MQTT_PASS" -t puck/all/ota -m "$N" -r
+          echo "pushed puck/all/ota = $N"

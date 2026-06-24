@@ -1,0 +1,185 @@
+#pragma once
+#include "version.h"            // FW_VERSION lives in version.h (tracked)
+
+// ============================================================
+//  TEMPLATE — copy this file to src/config.h (which is gitignored) and fill in your values:
+//  the OpenSky client id/secret below, and your server hosts — replace the __MQTT_HOST__ and
+//  __FW_HOST__ placeholders with your broker domain and firmware-host domain. (CI reconstructs
+//  config.h from this file and fills those placeholders from the MQTT_HOST / FW_HOST repo secrets,
+//  so the real hosts never live in the tracked source.) Build uses src/config.h, never this .example.
+// ============================================================
+//  EDIT THIS FILE to configure your puck. All optional —
+//  leave blank to run fully offline (Clock shows local time,
+//  Emoji runs in local demo mode with beep + screen feedback).
+// ============================================================
+
+// ---- Wi-Fi ----
+// Normally you set Wi-Fi ON THE DEVICE at first boot (it opens a setup hotspot).
+// These are optional fallback defaults; leave blank to provision on-device.
+#define WIFI_SSID   ""
+#define WIFI_PASS   ""
+
+// ---- MQTT broker (friends emoji messaging) ----
+// Point this at YOUR broker. For your private Mosquitto, MQTT_HOST is the DOMAIN its TLS
+// cert is issued for (NOT an IP), with MQTT_TLS 1 / port 8883. For a quick local/plain test,
+// set MQTT_TLS 0 and MQTT_PORT 1883. Blank MQTT_HOST = MQTT off (device runs fully offline).
+#define MQTT_HOST   "__MQTT_HOST__"    // your broker domain (must match the TLS cert hostname); CI fills it from the MQTT_HOST secret
+#define MQTT_PORT   8883               // 8883 = TLS, 1883 = plain
+#define MQTT_TLS    1                  // 1 = TLS, verify broker via MQTT_CA_CERT; 0 = plain
+#define MQTT_USER   ""                 // unused: the MQTT username is the device's friend code
+#define MQTT_PASS   ""                 // leave blank: set the per-device password ON THE DEVICE (NVS)
+#define GROUP_ID    "planepuck-demo"   // deprecated: emoji now uses the friends list, not this group
+#define DEVICE_ID   "puck-a"           // MQTT client-id prefix (a unique per-chip suffix is appended)
+
+// Root CA(s) used to verify your broker's TLS cert when MQTT_TLS=1. Defaults are Let's Encrypt
+// ISRG Root X1 + X2 (cover RSA and ECDSA LE certs; valid for years). Replace only if your broker
+// uses a different CA (e.g. a self-signed root).
+static const char MQTT_CA_CERT[] = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw
+CQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2gg
+R3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMjAeFw0yMDA5MDQwMDAwMDBaFw00
+MDA5MTcxNjAwMDBaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5ldCBT
+ZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgyMHYw
+EAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0HttwW
++1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7AlF9
+ItgKbppbd9/w+kHsOdx1ymgHDB/qo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0T
+AQH/BAUwAwEB/zAdBgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwCgYIKoZI
+zj0EAwMDaAAwZQIwe3lORlCEwkSHRhtFcP9Ymd70/aTSVaYgLXTWNLxBo1BfASdW
+tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
+/q4AaOeMSQ+2b1tbFfLn
+-----END CERTIFICATE-----
+)EOF";
+
+// ---- Zero-touch MQTT enrollment (optional) ----
+// A fresh puck has no MQTT password in NVS. If ENROLL_URL/ENROLL_TOKEN are set, instead of asking the
+// user to type one, the puck self-provisions: once Wi-Fi + the clock are up it generates a random
+// password, POSTs {"code","pw"} over HTTPS to ENROLL_URL with an "Authorization: Bearer ENROLL_TOKEN"
+// header; the droplet registers it in Mosquitto (mosquitto_passwd) and the puck stores it in NVS and
+// connects — nobody ever types an MQTT password. Blank ENROLL_URL = off (use the captive-portal field).
+// The TOKEN only authorizes ENROLLMENT (not message traffic) and it ends up in the binary, so
+// rate-limit it server-side and rotate it once your fleet is provisioned. HTTPS is verified against
+// MQTT_CA_CERT above (the endpoint sits on your droplet behind Caddy). Server side + flow:
+// tools/enroll-server.py and tools/OTA-SETUP.md ("Zero-touch enrollment").
+// Must match the token configured on the enroll server. Generate one with: openssl rand -hex 32
+#define ENROLL_URL    ""   // e.g. "https://__FW_HOST__/enroll"  ("" = no self-enroll)
+#define ENROLL_TOKEN  ""   // shared enroll secret (server checks it); blank when ENROLL_URL is blank
+
+// ---- OTA firmware updates ----
+// Over-the-air updates: each puck polls a small JSON manifest over HTTPS (boot + every
+// OTA_POLL_HOURS), can be nudged instantly via the MQTT broadcast topic, or checked from the
+// Settings screen; when the manifest's version is greater than FW_VERSION it offers the update
+// on-screen (Update / Later) and, on confirm, flashes the inactive OTA slot and reboots.
+// The manifest + .bin are served over HTTPS from your droplet (Caddy) — its Let's Encrypt cert
+// validates against MQTT_CA_CERT above, so no extra CA is needed.
+// FW_VERSION is defined in src/version.h (tracked separately so tools/release.sh can bump+commit it
+// while this config.h — which holds secrets — stays gitignored).
+#define OTA_MANIFEST_URL  "https://__FW_HOST__/planepuck/version.json"  // "" = OTA off
+#define OTA_POLL_HOURS    24                                         // auto-poll cadence in hours (0 = no auto-poll; rely on Settings button + push)
+#define OTA_PUSH_TOPIC    "puck/all/ota"                             // MQTT "re-check now" broadcast nudge
+#define OTA_BIN_BASE      "https://__FW_HOST__/planepuck/firmware-v"  // targeted/picked flash: base + <ver> + ".bin"
+#define OTA_VERSIONS_URL  "https://__FW_HOST__/planepuck/versions.json" // list of installable versions (on-device picker)
+#define OTA_TEST_URL      "https://__FW_HOST__/planepuck/test-devices.json" // {"test":[codes]}; a listed device sees RC versions
+
+// ---- Time ----
+// Timezone is also chosen on-device during Wi-Fi setup; this is the default
+// until you pick one there. POSIX TZ string (Pacific shown).
+#define TZ_STRING   "PST8PDT,M3.2.0,M11.1.0"
+#define NTP_SERVER  "pool.ntp.org"
+
+// ---- Clock / screensaver / world clock ----
+#define LAUNCHER_IDLE_MS       60000UL   // home screen auto-opens the Clock after this much idle time
+#define CLOCK_DRIFT_PERIOD_MS  45000UL   // anti-burn-in: shift the clock block this often
+#define CLOCK_DRIFT_MAX_PX     14        // max +/- drift from center (X and Y) — keeps it on-screen
+#define MAX_WORLD_CITIES       4         // world-clock rows under the local time (cities chosen in Settings)
+#define MAX_WEATHER_CITIES     4         // Weather app shows up to this many cities, equally divided (Settings)
+
+// ---- Weather (Open-Meteo, no API key) ----
+// Location is auto-detected by IP on first use; these are only a fallback if
+// detection fails (default: San Francisco).
+#define WEATHER_UNITS_F  1            // default units: 1 = Fahrenheit/mph, 0 = Celsius/km-h (override on-device in Settings)
+#define WEATHER_LAT      "37.77"
+#define WEATHER_LON      "-122.42"
+#define WEATHER_CITY     "San Francisco"
+
+// ---- Flight tracking (adsb.lol, no API key) ----
+#define FLIGHT_RADIUS_NM  30          // search radius around your location (nautical miles)
+
+// ---- Flight routes (OpenSky Network; optional, free) ----
+// Origin/destination derived from each aircraft's actual tracked movement (accurate, unlike the
+// free static route DBs). Create a free account at opensky-network.org, then an API client under
+// Account -> "API clients" to get a client id + secret. Blank = routes show "route unknown".
+// NOTE: OpenSky only has COMPLETED flights, so a plane still en route shows its most recent
+// finished leg, not the live destination; a just-landed or looked-up flight shows correctly.
+#define OPENSKY_CLIENT_ID      ""
+#define OPENSKY_CLIENT_SECRET  ""
+
+// ---- Compass radar (heading-up rotation; needs a magnetometer) ----
+// The Flight radar rotates to heading-up only on units that actually have a
+// magnetometer (auto-detected at boot). Two correction knobs, both applied to the
+// computed heading:
+//   HEADING_OFFSET_DEG  - fixes a device-axis mismatch. If, after a figure-8 cal, the
+//                         "N" marker doesn't point at true north, nudge this until it does.
+//   MAG_DECLINATION_DEG - magnetic-to-true correction for YOUR area (e.g. roughly +13 in
+//                         the US west, negative in the east; 0 = ignore, fine for nearby use).
+#define HEADING_OFFSET_DEG    0
+#define MAG_DECLINATION_DEG   0
+
+// ---- Brightness (0-255) ----
+#define BRIGHT_DAY    180
+#define BRIGHT_NIGHT  64        // night level (also the sensor's dark-room floor); raised so sensor-less units aren't too dim
+
+// Deep idle-dim: after IDLE_DIM_SEC with no touch, drop below the normal level (a third tier on top
+// of the 8s wake-boost + the normal day/night level). With the light sensor present the deep level
+// scales with ambient; without it, a fixed level that's lower at night.
+#define IDLE_DIM_SEC        120       // seconds of no touch before the deep idle-dim kicks in
+#define BRIGHT_IDLE_DAY     40        // deep-idle level, daytime / sensor absent
+#define BRIGHT_IDLE_NIGHT   32        // deep-idle level, night (lower than day, but still readable)
+#define IDLE_DIM_SCALE_PCT  35        // sensor present: deep-idle target = this % of the ambient target
+
+// Night window (24h): night is before DAY_START or at/after NIGHT_START
+#define DAY_START_HOUR    7
+#define NIGHT_START_HOUR  22
+
+// ---- Ambient light sensor (CoreS3 LTR-553) ----
+// The sensor is AUTO-DETECTED at boot (probed over I2C). If present, brightness follows real room
+// light; if absent (e.g. the CoreS3 SE, which has no LTR-553), the time-of-day schedule is used.
+// USE_LIGHT_SENSOR is no longer the gate (kept for reference). Set FORCE_NO_LIGHT_SENSOR=1 to ignore
+// the sensor even when present (force the time-of-day schedule).
+#define USE_LIGHT_SENSOR       0
+#define FORCE_NO_LIGHT_SENSOR  0
+// Raw CH0 ambient readings that map to the brightness range (tune to taste):
+//   at/below LUX_DARK -> BRIGHT_NIGHT,  at/above LUX_BRIGHT -> BRIGHT_DAY
+#define LUX_DARK      5
+#define LUX_BRIGHT    400

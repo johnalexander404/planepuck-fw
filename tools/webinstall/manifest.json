@@ -1,0 +1,13 @@
+{
+  "name": "PlanePuck",
+  "version": "0",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "planepuck-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

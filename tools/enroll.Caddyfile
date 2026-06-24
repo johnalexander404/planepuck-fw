@@ -1,0 +1,35 @@
+# PlanePuck — fw.example.com Caddy site block.
+#
+# This REPLACES the old file_server-only `fw.example.com { ... }` block from OTA-SETUP.md step 2. It now
+# serves the OTA manifest/binaries AND the ESP Web Tools installer page (static files), and proxies
+# the zero-touch MQTT enroll endpoint (POST /enroll) to the local enroll service (tools/enroll-server.py
+# behind tools/planepuck-enroll.service on 127.0.0.1:8090).
+#
+# Leave your existing global `layer4 { :8883 ... }` MQTT-TLS block untouched — it's unrelated.
+
+fw.example.com {
+	# Zero-touch MQTT enrollment: a fresh puck POSTs {code,pw} here; the service registers it in
+	# Mosquitto. The bearer token (ENROLL_TOKEN) is verified by the service, not Caddy.
+	handle /enroll {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	# Everything else is static: version.json, firmware-v<N>.bin, planepuck-merged.bin, manifest.json,
+	# and index.html (the ESP Web Tools installer, served at https://fw.example.com/).
+	handle {
+		root * /var/www/planepuck-fw
+		file_server
+	}
+}
+
+# OPTIONAL per-IP rate limiting on /enroll needs the caddy-ratelimit plugin
+# (xcaddy build --with github.com/mholt/caddy-ratelimit). If you don't add the plugin, the service
+# has a coarse global limiter and you can run fail2ban against its [enroll] "bad or missing token"
+# log lines (journalctl -u planepuck-enroll). Example once the plugin is installed:
+#
+#	handle /enroll {
+#		rate_limit {
+#			zone enroll { key {remote_host}  events 5  window 1m }
+#		}
+#		reverse_proxy 127.0.0.1:8090
+#	}

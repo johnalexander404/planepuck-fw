@@ -1,0 +1,60 @@
+name: fleet
+
+# Run fleet operations from the Actions tab (Actions -> fleet -> "Run workflow") instead of a local
+# shell — uses the MQTT operator secrets from the vault. Wraps tools/fleet.py over TLS to the broker.
+# Requires the operator ACLs from tools/OTA-SETUP.md (topic read fleet/#, write fleet/ota/+ + puck/all/ota).
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'list | send | broadcast'
+        type: choice
+        options: [list, send, broadcast]
+        default: list
+        required: true
+      target:
+        description: 'device code OR group name e.g. test/prod (send only)'
+        required: false
+      version:
+        description: 'firmware version int (send / broadcast)'
+        required: false
+      force:
+        description: 'silent flash, no on-device confirm (send only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  fleet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+      - name: fleet.py ${{ inputs.command }}
+        env:
+          FLEET_HOST: ${{ secrets.MQTT_HOST }}     # broker domain (kept out of tracked source)
+          FLEET_PORT: '8883'                       # TLS frontend; fleet.py adds --capath on 8883
+          FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          FLEET_GROUPS: ${{ vars.FLEET_GROUPS }}      # repo variable: {"test":[...],"prod":[...]}
+          CMD: ${{ inputs.command }}
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ]; then
+            echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets (the ota-operator account)"; exit 1
+          fi
+          case "$CMD" in
+            list)
+              python3 tools/fleet.py list --wait 4 ;;
+            send)
+              if [ -z "$TARGET" ] || [ -z "$VERSION" ]; then echo "::error::send needs 'target' (code/group) + 'version'"; exit 1; fi
+              ARGS=(send "$TARGET" "$VERSION"); [ "$FORCE" = "true" ] && ARGS+=(--force)
+              python3 tools/fleet.py "${ARGS[@]}" ;;
+            broadcast)
+              if [ -z "$VERSION" ]; then echo "::error::broadcast needs 'version'"; exit 1; fi
+              python3 tools/fleet.py broadcast "$VERSION" ;;
+          esac

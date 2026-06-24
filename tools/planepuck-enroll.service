@@ -1,0 +1,31 @@
+[Unit]
+Description=PlanePuck MQTT enrollment endpoint
+After=network.target mosquitto.service
+Wants=mosquitto.service
+
+[Service]
+# Runs as root so it can write the Mosquitto password file and reload the broker. The systemd
+# sandbox below confines it (read-only FS except /etc/mosquitto, no home, private /tmp, no new privs).
+# Locked-down alternative: run as a dedicated user, set PLANEPUCK_RELOAD_CMD="sudo systemctl reload
+# mosquitto", grant a tight sudoers rule, and make the passwd file group-writable — see OTA-SETUP.md.
+User=root
+Environment=PLANEPUCK_PASSWD_FILE=/etc/mosquitto/passwd
+Environment=PLANEPUCK_RELOAD_CMD=systemctl reload mosquitto
+Environment=PLANEPUCK_BIND=127.0.0.1:8090
+# The enroll token is the ONLY secret — keep it out of this unit; put it in a root-only env file:
+#   /etc/planepuck/enroll.env   ->   PLANEPUCK_ENROLL_TOKEN=<same value as ENROLL_TOKEN in config.h>
+#   chmod 600 /etc/planepuck/enroll.env
+EnvironmentFile=/etc/planepuck/enroll.env
+ExecStart=/usr/bin/python3 /opt/planepuck/enroll-server.py
+Restart=on-failure
+RestartSec=2
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/etc/mosquitto
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,366 @@
+# PlanePuck OTA — one-time server setup
+
+Each puck pulls firmware over **HTTPS from your droplet** (auto-poll at boot + every
+`OTA_POLL_HOURS`, plus a Settings "Check Updates" button) and, optionally, can be **nudged
+instantly over MQTT**. When the manifest's `version` is greater than the device's compiled
+`FW_VERSION`, the puck shows an **Update / Later** prompt and, on confirm, flashes the inactive
+OTA slot and reboots. The pucks already ship OTA-capable (dual 6.5 MB app slots) — no partition
+work needed.
+
+This file is the **one-time** server setup. Day to day you just run `tools/release.sh`.
+
+---
+
+## 1. DNS
+Add an `A`/`AAAA` record `fw.example.com` → your droplet's IP. The firmware already pins the Let's
+Encrypt roots (`MQTT_CA_CERT` in `config.h`), so a Let's Encrypt cert on this host validates with
+**no firmware change**.
+
+## 2. Caddy — firmware file server
+Your droplet already runs Caddy (with the `layer4` block terminating MQTT TLS on 8883 — leave that
+untouched). Add a normal HTTPS file-server vhost to the Caddyfile:
+
+```
+fw.example.com {
+    root * /var/www/planepuck-fw
+    file_server
+}
+```
+
+Then:
+
+```bash
+sudo mkdir -p /var/www/planepuck-fw/planepuck
+sudo systemctl reload caddy        # Caddy auto-issues the LE cert on first request
+```
+
+This must match `OTA_MANIFEST_URL` in `config.h`:
+`https://fw.example.com/planepuck/version.json`.
+
+## 3. Mosquitto ACL — only if you want the instant MQTT push
+The push is a broadcast on `puck/all/ota`. Every device must be allowed to **read** it; only your
+operator account may **publish** it (device accounts — their friend codes — must NOT get publish).
+
+Edit `/etc/mosquitto/aclfile` (Mosquitto rejects **trailing inline comments** — keep `#` lines on
+their own line):
+
+```
+# OTA broadcast: every authenticated device may read this topic
+topic read puck/all/ota
+
+# Fleet telemetry: a device writes its own presence + version; reads its own targeted command
+pattern write fleet/status/%u
+pattern write fleet/online/%u
+pattern read fleet/ota/%u
+
+# the operator account that rolls out updates: broadcast, plus see the fleet + push to one device
+user ota-operator
+topic write puck/all/ota
+topic read fleet/#
+topic write fleet/ota/+
+```
+
+Create that operator account:
+
+```bash
+sudo mosquitto_passwd -b /etc/mosquitto/passwd ota-operator <a-strong-password>
+sudo systemctl reload mosquitto
+```
+
+`puck/all/ota` is 3 topic levels, so it does **not** match the per-device `pattern write
+puck/+/+/%u` rule — devices can't publish it. Good. Likewise `fleet/ota/+` is operator-only, so a
+device can only *read* commands aimed at it, never send one to another device.
+
+> Skip step 3 entirely and OTA still works fully via the auto-poll; you just won't have instant
+> push or fleet visibility. The push only tells pucks to "re-check the manifest now" — the manifest
+> stays the single source of truth.
+
+## Fleet management (see devices, push a specific version)
+
+Once the `fleet/*` ACLs above are in place, every connected puck publishes retained telemetry
+(`fleet/status/<code>` = `{v,n}`, `fleet/online/<code>` = `1`/`0` via Last-Will), and `tools/fleet.py`
+(wraps `mosquitto_sub`/`mosquitto_pub`, no pip deps) reads it and sends targeted updates:
+
+```bash
+export FLEET_USER=ota-operator FLEET_PASS=<password>     # FLEET_HOST defaults to mqtt.example.com:8883
+tools/fleet.py list                       # CODE / NAME / VER / online / GROUP
+tools/fleet.py groups                     # list defined groups + members
+tools/fleet.py send CAFEF00D 16           # one device -> pops Update/Later there
+tools/fleet.py send CAFEF00D 16 --force   # silent flash (device must be online; downgrade allowed)
+tools/fleet.py send test 18 --force       # every device in the 'test' group
+tools/fleet.py broadcast 16               # nudge the whole fleet to recheck the manifest
+```
+
+### Device groups: test (a list) vs prod (the default)
+There are two buckets. **`test`** is an explicit allow-list you maintain. **`prod` is the default** —
+every reporting device that is *not* in `test`. So a freshly-enrolled device is prod automatically; you
+never edit a prod list (prod is computed live from telemetry, never stored). `send` takes a single
+8-hex device **code**, or the name **`test`** / **`prod`**.
+
+The `test` list is read from (in order) `--groups <file>`, the `FLEET_GROUPS` env var (inline JSON),
+or `tools/fleet-groups.json`:
+
+```json
+{ "test": ["DEADBEEF", "CAFEF00D"] }
+```
+
+`tools/fleet-groups.json` is **gitignored** (device codes are your MQTT usernames — keep them out of
+the public repo); copy `tools/fleet-groups.json.example` to start. Workflow: cut an RC → push it to
+test (`fleet.py send test 18 --force`) → verify → promote to everyone with a final cut, or roll it
+with `fleet.py send prod 18` (every online device not in test). For **GitHub Actions**, put the same
+JSON in a repo **variable** `FLEET_GROUPS` (Settings → Secrets and variables → Actions → Variables) —
+the `fleet` workflow reads it, so `test`/`prod` resolve there too without committing codes.
+
+To move a device from prod into test, just add its code to the `test` list (local file or the
+`FLEET_GROUPS` variable). Removing it from `test` returns it to prod. There's no per-device flag on
+the device or broker — membership is purely this operator-side list.
+
+### On-device version picker: who sees RC builds, and the floor
+`Settings → Versions` lets a device install a specific version. To keep prod devices off in-progress
+RCs, the picker filters by channel + a floor:
+- **prod** (default) → only **released** versions (those with a final `fw-v<N>` tag), `≥ min`.
+- **test/beta** → the full version list incl. the in-progress RC, `≥ min`. The picker header reads
+  `Firmware (beta)`.
+
+A device knows it's beta by checking whether **its own code is in the server's `test-devices.json`**
+(`OTA_TEST_URL`). That file is the `FLEET_GROUPS.test` list, published by the **`sync-test`** GitHub
+Action (Actions → sync-test → Run workflow, or `gh workflow run sync-test`) — it **overwrites**
+`test-devices.json` from the variable each run, so editing `FLEET_GROUPS` + re-running is the single
+control. `versions.json` carries `released` + `min`; CI computes `released` from the final tags and
+`min` from the **`OTA_MIN_VERSION`** repo variable (blank → 1). So the picker locks down without any
+per-device setup — same `FLEET_GROUPS` list drives both the auto-push (CI) and the device's channel.
+
+A targeted `send` is **not retained** (it's an immediate command), so the device must be online —
+check `list` first. Versions come from `versions.json` (CI regenerates it from the bins on disk), and
+the device builds the download URL from the compiled `OTA_BIN_BASE` + version, so only a *published*
+binary can ever be installed. On-device, the same picker lives in **Settings → Versions**.
+
+### Broadcast not arriving? two server-side causes
+The firmware path is correct (it subscribes `puck/all/ota` and routes it to the updater). If a release
+doesn't pop the prompt fleet-wide, check:
+1. **CI didn't publish it** — the Action only runs the push when `MQTT_OPERATOR_USER`/`MQTT_OPERATOR_PASS`
+   secrets exist (else the job logs "skipping push"). Set them (see CI release below) and create the
+   `ota-operator` account.
+2. **The ACL denies the read** — without `topic read puck/all/ota` Mosquitto silently drops the
+   device's subscription. Verify from a laptop with a device's creds:
+   `mosquitto_sub -h mqtt.example.com -p 8883 --capath /etc/ssl/certs -u <code> -P <pw> -t puck/all/ota`
+   then publish from the operator and confirm it arrives.
+
+---
+
+## Rolling out an update
+From the repo:
+
+```bash
+tools/release.sh "short notes"        # auto-bump to (latest final fw-v tag)+1, commit, push the tag
+tools/release.sh 7 "short notes"      # or force a specific version
+```
+
+### From GitHub Actions instead of a local shell
+Both flows can run from the **Actions** tab (no laptop/droplet shell, uses the vault secrets):
+- **release** → *Run workflow*: inputs `version` (blank = next), `rc` (checkbox), `notes`. It bumps
+  `version.h` + tags + builds + publishes in one job (RC-gated exactly like a pushed tag). Equivalent
+  to `tools/release.sh [rc] [version] "notes"`.
+- **fleet** → *Run workflow*: `command` = `list` / `send` / `broadcast`, with `target` / `version` /
+  `force`. Runs `tools/fleet.py` against the broker with the `MQTT_OPERATOR_*` secrets. Equivalent to
+  `tools/fleet.py …`. (`list` needs the operator `topic read fleet/#` ACL.)
+- **sync-test** → *Run workflow*: publishes `FLEET_GROUPS.test` to the droplet as `test-devices.json`
+  (overwrite), so those devices' pickers show RC builds. Run it after editing the `FLEET_GROUPS` variable.
+
+CLI equivalents: `gh workflow run release -f version=18 -f rc=true -f notes=…` /
+`gh workflow run fleet -f command=send -f target=test -f version=18 -f force=true` (target = code or group;
+set the `FLEET_GROUPS` repo **variable** so group names resolve in CI).
+
+### Staged release candidates (test before promoting to the fleet)
+A normal cut above is a **final** — it moves the fleet's `version.json` to the new version, so every
+device is offered it. To test a build on a few devices first, cut a **release candidate**:
+
+```bash
+tools/release.sh rc "short notes"     # tag fw-v<N>-rc<M> for the next version N
+```
+
+An RC build publishes `firmware-v<N>.bin` + adds N to `versions.json` (it does **not** move the fleet's
+`version.json`/manifest, and sends no broadcast) — and then **auto-deploys to the `test` group**: CI
+runs `fleet.py send test N --force` so your online test devices flash it immediately. Prereqs for the
+auto-push: the `MQTT_OPERATOR_*` secrets + a `FLEET_GROUPS` repo **variable** containing a `test` list
+(else the RC is still published, just not auto-pushed — install it manually). So the two-job loop:
+
+1. **Cut RC → test:** `tools/release.sh rc "notes"` (or `gh workflow run release -f rc=true -f notes=…`).
+   Tags `fw-v<N>-rc<M>`, publishes the bin, and flashes the **test** group. The rest of the fleet is
+   untouched. (Re-run to continue: `release.sh rc` → the next `rc<M>` on the same N.)
+2. **Promote → prod:** when happy, `tools/release.sh "notes"` (no `rc`) or
+   `gh workflow run release -f notes="promote"`. With no version given it **finalises the in-flight
+   candidate** (cuts `fw-v<N>` for the same N, the same tested commit) → CI sets `version.json` = N +
+   installer + broadcast → the whole fleet (incl. test) auto-updates. *(Gradual prod: `fleet.py send
+   prod N` after the final cut.)*
+
+> Auto-push reaches only test devices that are **online** when CI runs (targeted commands aren't
+> retained). Offline ones get it on the next `fleet.py send test N` or, once promoted, the normal poll.
+
+`release.sh` only bumps `src/version.h`, commits, and pushes a `fw-v<N>` tag — it does **not** build
+or deploy. The tag triggers the **`release` GitHub Action**, which builds in the cloud and publishes
+to the droplet: `firmware-v<N>.bin` + `version.json` (OTA), plus `planepuck-merged.bin` +
+`manifest.json` + `index.html` (the web installer), and — if the MQTT operator secrets are set — the
+instant push. See "CI release" below for the one-time secret setup.
+
+**Always bench-test the exact `.bin` on one unit before publishing the manifest** — a download
+failure is safe (the running firmware is untouched), but a flashed-but-crashing image needs USB
+recovery (`pio run -t upload`). There is no automatic rollback in v1.
+
+## Security note (v1)
+HTTPS + the pinned CA authenticate the **server**, not the **binary** — anyone who can write the
+droplet's web root could serve a bad image. The hardening path is **signed OTA** (sign the `.bin`
+locally, ship a public key in firmware, verify before the boot-switch). Not in v1.
+
+> Also note: the published `firmware-v<N>.bin` has the **OpenSky client secret compiled in** (it's a
+> `#define` string), so anyone who downloads it can `strings` it out. The fw URL is unlisted (no
+> directory index) and the secret is a low-value rate-limited key, but if that matters, proxy OpenSky
+> through the droplet instead of baking the secret into firmware. (This is independent of CI — it's
+> true of any build.)
+
+---
+
+# CI release (GitHub Actions) — build in the cloud, secrets from the vault
+
+Instead of building/publishing locally, `tools/release.sh` just bumps `src/version.h`, commits, and
+pushes a `fw-v<N>` tag; the **`.github/workflows/release.yml`** Action (triggered by that tag) checks
+out, reconstructs `config.h` from `config.h.example` + vault secrets, builds with PlatformIO, and
+publishes the firmware + manifest to the droplet (same paths as the manual flow).
+
+## One-time setup
+1. **Create the repo on GitHub** and point the local repo at it:
+   `git remote add origin git@github.com:<you>/planepuck.git`
+2. **Deploy SSH key** (lets the Action write to the droplet): generate a dedicated keypair, add the
+   **public** key to the droplet's `~/.ssh/authorized_keys`, keep the **private** key for the vault:
+   `ssh-keygen -t ed25519 -f deploy_key -N "" -C planepuck-ci`
+   `ssh-copy-id -i deploy_key.pub root@fw.example.com`   (or paste deploy_key.pub into authorized_keys)
+3. **Add repo secrets** (Settings → Secrets and variables → Actions → New repository secret):
+   - `FW_HOST` — your firmware/HTTPS host (e.g. `fw.example.com`); CI substitutes it for the
+     `__FW_HOST__` placeholder, building the OTA + enroll URLs in `config.h`.
+   - `MQTT_HOST` — your broker domain (e.g. `mqtt.example.com`); replaces `__MQTT_HOST__`. Both host
+     secrets keep the real endpoints out of the tracked source — omit one and that feature's URLs
+     come out blank (so OTA / MQTT is simply off in that build).
+   - `OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET` — injected into `config.h` at build.
+   - `DEPLOY_SSH_KEY` — the **private** key from step 2 (whole file, incl. BEGIN/END lines).
+   - `DROPLET_HOST` — e.g. `root@fw.example.com` (must resolve to the droplet; a bare apex with no DNS won't work).
+   - *(optional, for instant push)* `MQTT_OPERATOR_USER` + `MQTT_OPERATOR_PASS` — an account allowed to
+     publish `puck/all/ota`. Omit to let pucks pick the update up on their next poll.
+   - *(optional, for zero-touch enrollment)* `ENROLL_TOKEN` — the **same** value as the enroll
+     server's `/etc/planepuck/enroll.env`. Set it to compile self-enroll into CI builds; omit and
+     pucks fall back to a typed MQTT password. Generate with `openssl rand -hex 32`. See
+     "Zero-touch enrollment" below.
+
+## Cutting a release
+```
+tools/release.sh "world clock + screensaver"   # auto-bumps to (latest fw-v* tag)+1, commits, pushes the tag
+```
+Then watch the **Actions** tab: the `release` job builds v<N>, publishes `firmware-v<N>.bin` +
+`version.json`, and (if MQTT secrets are set) nudges the fleet. Pass an explicit number to force one:
+`tools/release.sh 9 "notes"`.
+
+Notes:
+- The Action reconstructs `config.h` **from `config.h.example`** — so keep non-secret config there
+  (anything you change in your local `config.h` that isn't a secret must also land in the example, or
+  CI will build with the old value).
+- Host-key trust uses `ssh-keyscan` (trust-on-first-use). To pin it, add a `DROPLET_KNOWN_HOSTS`
+  secret and write it to `~/.ssh/known_hosts` in the workflow instead.
+- The deploy key can write the droplet web root — scope it (a dedicated user / restricted key) if you
+  don't want a broad root key in the vault.
+
+---
+
+# First burn — the web installer (ESP Web Tools)
+
+OTA can't flash a **blank** CoreS3 (it only replaces an already-running PlanePuck image), so the very
+first flash is over USB. The repeatable, no-toolchain way to do it is the browser installer:
+`tools/webinstall/index.html` uses ESP Web Tools to flash the **merged** image over Web Serial.
+
+It needs three files in the droplet web root, all published automatically by the `release` Action:
+- `https://fw.example.com/` → `index.html` (the installer page, from `tools/webinstall/index.html`)
+- `https://fw.example.com/planepuck/manifest.json` (ESP Web Tools manifest)
+- `https://fw.example.com/planepuck/planepuck-merged.bin` (bootloader + partition table + app in one image)
+
+Caddy already serves these once the `fw.example.com` site exists — use the block in
+`tools/enroll.Caddyfile` (it serves the static files **and** adds the `/enroll` route below), then
+`sudo systemctl reload caddy`.
+
+**To flash a fresh puck:** open `https://fw.example.com/` in **desktop Chrome or Edge**, plug the CoreS3
+in with a **data** USB-C cable, click **Install PlanePuck**, pick the serial port, and accept
+**Erase** on a new device (~1–2 min). It reboots into the captive portal; the recipient joins
+`PlanePuck-Setup` and enters Wi-Fi — and with enrollment on (below), nothing else.
+
+> The merged `.bin` is downloadable (it's what the browser flashes) and, like every published build,
+> contains the compiled-in secrets (OpenSky key, and the enroll token if enabled). Keep the installer
+> URL unlisted if that matters; this is the same exposure as the OTA `.bin` (see the security note above).
+
+---
+
+# Zero-touch enrollment — the MQTT password sets itself
+
+With `ENROLL_URL`/`ENROLL_TOKEN` set in the firmware, a fresh puck provisions its own MQTT password:
+once Wi-Fi + the clock are up it generates a random password and `POST`s `{code, pw}` (bearer
+`ENROLL_TOKEN`) to `https://fw.example.com/enroll`; a small service registers it with `mosquitto_passwd`
+and the puck stores it in NVS and connects as user `<code>`. **Nobody types an MQTT password.** Skip
+this whole section to keep the manual model (type the password in the Settings captive portal).
+
+## 1. Pick the enroll token
+Generate one and use the **same** value in two places:
+```bash
+openssl rand -hex 32
+```
+- firmware: `ENROLL_TOKEN` in `config.h` (or the `ENROLL_TOKEN` repo secret for CI builds)
+- server:   `/etc/planepuck/enroll.env` (next step)
+
+## 2. Install the enroll service
+```bash
+sudo install -d -m 755 /opt/planepuck
+sudo install -m 755 tools/enroll-server.py /opt/planepuck/enroll-server.py
+sudo install -d -m 700 /etc/planepuck
+printf 'PLANEPUCK_ENROLL_TOKEN=%s\n' "<your-token>" | sudo tee /etc/planepuck/enroll.env >/dev/null
+sudo chmod 600 /etc/planepuck/enroll.env
+sudo install -m 644 tools/planepuck-enroll.service /etc/systemd/system/planepuck-enroll.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now planepuck-enroll
+systemctl status planepuck-enroll --no-pager
+```
+Make sure the Mosquitto password file exists and is writable by the broker:
+```bash
+sudo touch /etc/mosquitto/passwd
+sudo chown mosquitto:mosquitto /etc/mosquitto/passwd
+sudo chmod 640 /etc/mosquitto/passwd
+```
+
+## 3. Route /enroll through Caddy
+Use the `fw.example.com` block in `tools/enroll.Caddyfile` (adds `handle /enroll → reverse_proxy
+127.0.0.1:8090` in front of the file server), then `sudo systemctl reload caddy`. Verify:
+```bash
+curl https://fw.example.com/enroll                                                  # {"ok": true, ...}  (health)
+curl -X POST https://fw.example.com/enroll -H 'Authorization: Bearer WRONG' -d '{}' # 401 unauthorized
+```
+End to end: flash a puck, set Wi-Fi, then watch `journalctl -u planepuck-enroll -f` for
+`[enroll] enrolled <code>`. The puck's Friends screen flips to connected within a few seconds.
+
+## Locked-down alternative (don't run the service as root)
+Run it as a dedicated user and grant only what it needs:
+```bash
+sudo useradd -r -s /usr/sbin/nologin puckenroll
+sudo usermod -aG mosquitto puckenroll            # write the (group-writable) passwd file
+sudo visudo -f /etc/sudoers.d/planepuck-enroll   # add the line below:
+#   puckenroll ALL=(root) NOPASSWD: /usr/bin/systemctl reload mosquitto
+```
+Then in the unit set `User=puckenroll`, `Environment=PLANEPUCK_RELOAD_CMD=sudo systemctl reload
+mosquitto`, and change `ReadWritePaths=/etc/mosquitto` to the passwd file as needed.
+
+## Security model (read this)
+- The token only authorizes **enrollment** (set the password for a friend code) — nothing else. It is
+  **compiled into the firmware**, and the firmware is downloadable (OTA `.bin` + the installer's merged
+  `.bin`), so treat the token as **semi-public**: rate-limit `/enroll` and **rotate the token once the
+  fleet is provisioned** (re-flash with a new one — existing passwords keep working; rotation only
+  stops *new* enrollments).
+- Worst case with a leaked token: someone registers a password for a code they don't own and connects
+  as it (snoop/impersonate that one inbox). The per-device `%u` ACL still confines each account to its
+  own `puck/<code>/#`, and the app-layer friend-drop still hides emotes from non-friends.
+- Enrollment is idempotent + self-healing: `mosquitto_passwd -b` overwrites, so a puck that loses NVS
+  just re-enrolls a fresh password and reconnects.
+- Rate limiting: the service has a coarse global limiter; for per-IP limits use the caddy-ratelimit
+  plugin or fail2ban on its `journalctl -u planepuck-enroll` "bad or missing token" lines.
