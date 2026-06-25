@@ -244,13 +244,12 @@ namespace Provision {
     h += F("<label>Finnhub API key (optional)</label>"
            "<input name=fhkey placeholder='unchanged if left blank'></div>");
 
-    // MQTT password: only ask when self-enroll is OFF. With ENROLL_URL/ENROLL_TOKEN set, the puck
-    // provisions its own broker password automatically, so there's nothing for the user to type.
-    if (!(strlen(ENROLL_URL) && strlen(ENROLL_TOKEN))) {
-      h += sec("<path d='M5 5h14v10H9l-4 3z'/>", "Friends");
-      h += F("<label>MQTT password (optional)</label>"
-             "<input name=mpass type=password placeholder='unchanged if left blank'></div>");
-    }
+    // MQTT password: with self-enroll (ENROLL_URL/ENROLL_TOKEN) the puck provisions its own, so this is
+    // normally left blank — but always offer it as a MANUAL OVERRIDE (e.g. enrollment failed, or the
+    // broker password drifted out of sync). Typed = save + use it (skips enroll); blank = keep current.
+    h += sec("<path d='M5 5h14v10H9l-4 3z'/>", "Friends");
+    h += F("<label>MQTT password (optional; overrides auto-enroll)</label>"
+           "<input name=mpass type=password placeholder='unchanged if left blank'></div>");
     h += F("<button type=submit>Save &amp; restart</button></form>"
            "<p class=foot>PlanePuck &middot; settings are saved on the device</p>"
            "</div></div></body></html>");
@@ -1768,16 +1767,19 @@ namespace Broker {
           // the per-device secret from NVS (self-enrolled or typed in Settings, never compiled in).
           String cid  = String(DEVICE_ID) + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
           String user = Friends::myCode();
-          Serial.printf("[mqtt] connecting as %s (pwlen=%d)\n", user.c_str(), pass.length());
+          { WiFiClient probe; uint32_t t0 = millis();                                  // USB diag: raw TCP reach to the broker (no TLS)
+            bool tcp = probe.connect(MQTT_HOST, MQTT_PORT, 4000); probe.stop();
+            log_e("[mqtt] try %s:%d pwlen=%d tcp=%d (%lums) heap=%u",
+                  MQTT_HOST, MQTT_PORT, pass.length(), tcp, (unsigned long)(millis() - t0), (unsigned)ESP.getFreeHeap()); }
           bool ok = gWillTopic.length()
             ? client.connect(cid.c_str(), user.c_str(), pass.c_str(),                 // LWT: broker marks us
                              gWillTopic.c_str(), 0, gWillRetain, gWillMsg.c_str())     //  offline on an ungraceful drop
             : client.connect(cid.c_str(), user.c_str(), pass.c_str());
           if (ok) {
             needSub = true; gUp = true;
-            Serial.println("[mqtt] connected");
+            log_e("[mqtt] connected as %s", user.c_str());
           } else {
-            Serial.printf("[mqtt] connect failed (state=%d)\n", client.state());
+            log_e("[mqtt] connect failed state=%d heap=%u", client.state(), (unsigned)ESP.getFreeHeap());
           }
         }
       }
@@ -1789,7 +1791,7 @@ namespace Broker {
     if (!enabled()) return;
 #if MQTT_TLS
     netClient.setCACert(MQTT_CA_CERT);   // CA-pin: reject any broker cert not chaining to this root
-    netClient.setHandshakeTimeout(8);    // bound a TLS stall on the connect task
+    netClient.setHandshakeTimeout(15);   // match OTA; the ECDSA (P-384) chain is slow to verify on-device
 #endif
     client.setServer(MQTT_HOST, MQTT_PORT);
     client.setBufferSize(512);           // headroom over the 256B default for friend payloads
