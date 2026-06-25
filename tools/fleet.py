@@ -86,13 +86,15 @@ def fetch_fleet(a, wait):
         parts = topic.split("/")
         if len(parts) != 3 or parts[0] != "fleet": continue
         kind, code = parts[1], parts[2]
-        d = dev.setdefault(code, {"code": code, "name": "", "ver": "?", "online": None})
+        d = dev.setdefault(code, {"code": code, "name": "", "ver": "?", "online": None, "channel": None})
         if kind == "status":
             try:
                 j = json.loads(payload); d["ver"] = str(j.get("v", "?")); d["name"] = str(j.get("n", ""))
             except ValueError: pass
         elif kind == "online":
             d["online"] = (payload.strip() == "1")
+        elif kind == "channel":
+            d["channel"] = payload.strip()    # the device's ACTUAL retained channel marker (source of truth)
     return dev
 
 
@@ -105,10 +107,11 @@ def cmd_list(a):
         return
     rows = sorted(dev.values(), key=lambda d: (d["online"] is not True, d["name"].lower(), d["code"]))
     nw = max([4] + [len(d["name"]) for d in rows])
-    print(f"{'CODE':<10} {'NAME':<{nw}} {'VER':>4}  {'STATUS':<8} GROUP")
+    print(f"{'CODE':<10} {'NAME':<{nw}} {'VER':>4}  {'STATUS':<8} CHANNEL")
     for d in rows:
         st = "online" if d["online"] else ("offline" if d["online"] is False else "?")
-        grp = "test" if d["code"].upper() in test else "prod"
+        # the device's real channel = its retained fleet/channel marker; fall back to the local allow-list guess
+        grp = d.get("channel") or ("test" if d["code"].upper() in test else "prod")
         print(f"{d['code']:<10} {d['name']:<{nw}} {('v'+d['ver']):>4}  {st:<8} {grp}")
     print(f"\n{len(rows)} device(s).")
 

@@ -2200,13 +2200,16 @@ namespace Ota {
 
     // 2) version list: prod sees "released" (finals), beta sees all "versions"; both floored at "min".
     int tmp[MAX_VERS]; int n = 0;
-    { JsonDocument doc;
+    for (int att = 0; att < 3 && n == 0; att++) {       // retry: a transient DNS/TLS hiccup must not leave the picker empty
+      if (att) vTaskDelay(pdMS_TO_TICKS(1200));
+      JsonDocument doc;
       if (getJson(otaVersionsUrl().c_str(), doc)) {
         int mn = doc["min"] | 1;
         JsonArray rel = doc["released"].as<JsonArray>();
         JsonArray use = (beta || rel.isNull()) ? doc["versions"].as<JsonArray>() : rel;  // fallback: all
         for (JsonVariant x : use) { int v = x | 0; if (v >= mn && n < MAX_VERS) tmp[n++] = v; }
-      } }
+      }
+    }
 
     for (int i = 1; i < n; i++) { int k = tmp[i], j = i - 1;            // sort descending (newest first)
       while (j >= 0 && tmp[j] < k) { tmp[j + 1] = tmp[j]; j--; } tmp[j + 1] = k; }
