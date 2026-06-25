@@ -98,11 +98,12 @@ void drawAppIcon(const char* name, int cx, int cy, uint16_t chip) {
     puck::display().fillSmoothRoundRect(cx - 15, cy + 1, 14, 12, 5, ink);    // shoulders (left)
     puck::display().fillSmoothRoundRect(cx + 1, cy + 1, 14, 12, 5, ink);     // shoulders (right)
   } else if (!strcmp(name, "Stocks")) {
-    int bx[4] = { cx - 14, cx - 7, cx, cx + 7 };                            // ascending bar chart
-    int bh[4] = { 9, 15, 21, 27 };
-    int by = cy + 13;
-    for (int k = 0; k < 4; k++)
-      puck::display().fillSmoothRoundRect(bx[k], by - bh[k], 5, bh[k], 1, ink);
+    // rising trend line with an up-right arrowhead (zig-zag stock graph)
+    puck::display().drawWedgeLine(cx - 15, cy + 8, cx - 6, cy,      1.6f, 1.6f, ink);
+    puck::display().drawWedgeLine(cx - 6,  cy,     cx + 1, cy + 5,  1.6f, 1.6f, ink);
+    puck::display().drawWedgeLine(cx + 1,  cy + 5, cx + 8, cy - 3,  1.6f, 1.6f, ink);
+    puck::display().drawWedgeLine(cx + 8,  cy - 3, cx + 16, cy - 11, 1.6f, 1.6f, ink);
+    puck::display().fillTriangle(cx + 16, cy - 12, cx + 16, cy - 3, cx + 7, cy - 12, ink);  // arrowhead
   } else {
     char c[2] = { name[0], 0 };                                      // fallback: first letter
     puck::display().setTextDatum(middle_center);

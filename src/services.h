@@ -150,6 +150,7 @@ namespace Flight {
   uint32_t version();
   void refreshNow();
   void setRange(int nm);                  // fetch radius (nm); the radar widens it on zoom-out (clamped >= FLIGHT_RADIUS_NM)
+  void setActive(bool on);                // Flight app open (fetch) / closed (idle — cached snapshot persists)
   void searchAirport(const String& code); // center the radar on an airport (3-letter IATA / 4-letter ICAO); async
   void clearCenter();                     // back to your-location radar
   bool airportCenter(String& code, String& name, float& youDist, float& youBearing);  // resolved airport center + your offset
@@ -187,6 +188,7 @@ namespace Weather {
   bool updating();                         // true while a refresh is in flight
   uint32_t version();                      // bumps on every successful update
   void refreshNow();                       // request an immediate refresh
+  void setActive(bool on);                 // Weather app open (fetch) / closed (idle — cached reading persists)
   const char* describe(int wmoCode);       // short condition text
   void suspend();                          // pause the background task (during an OTA flash)
   void resume();
@@ -209,7 +211,8 @@ namespace Stocks {
   bool get(int i, Quote& out);             // watchlist[i] quote (cache)
   bool add(const String& sym);             // add ticker (upper-cased) + persist; false if full/dup
   bool remove(const String& sym);          // remove + persist
-  void setFocus(const String& sym);        // detail open: prioritize polling + fetch its earnings
+  void setFocus(const String& sym);        // detail open: poll only this ticker (faster) + fetch its earnings
+  void setActive(bool on);                 // Stocks app open (poll) / closed (idle — cached prices persist)
   void requestSearch(const String& q);     // async symbol search
   bool searchPending();                    // a search is in flight
   int  searchResults(Match* out, int max); // copy matches (newest search)

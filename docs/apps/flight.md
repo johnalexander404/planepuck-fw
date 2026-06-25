@@ -71,7 +71,9 @@ touch-only. On the CoreS3 the single physical key is the power button: **short-c
 
 ## How it works
 The `Flight` background task (`updaterTask`, pinned to **core 0**, 20 KB stack for TLS) runs every
-`UPDATE_MS` (~15 s, nudged immediately by `refreshNow()`) and does up to four things per cycle:
+`UPDATE_MS` (~15 s, nudged immediately by `refreshNow()`) **only while the Flight app is open**
+(`setActive(true)` in `onEnter`, `false` in `onExit` — it idles and keeps the last snapshot cached
+otherwise, so it never fetches in the background) and does up to four things per cycle:
 
 1. **Nearby list** — `fetchNearby` GETs `adsb.lol /v2/lat/lon/dist` over **HTTP** with radius
    `gFetchNm`. On-ground / `alt <= 0` aircraft are dropped, the rest sorted by distance, nearest

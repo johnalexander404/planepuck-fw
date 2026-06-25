@@ -697,6 +697,8 @@ namespace Weather {
   // Readings shared with the UI, owned by the background updater task. [0] = home location when no
   // weather cities are configured; otherwise one entry per configured city (chosen in Settings).
   static const uint32_t   UPDATE_MS  = 60000;   // refresh cadence: every minute
+  static volatile bool    gActive    = false;   // Weather app open -> fetch; closed -> idle (cached reading persists)
+  static volatile bool    gPrimed    = false;   // a one-time boot fetch has run, so first open is never empty
   static SemaphoreHandle_t mtx        = nullptr;
   static TaskHandle_t      taskH      = nullptr;
   static Reading           gReadings[MAX_WEATHER_CITIES];
@@ -906,7 +908,7 @@ namespace Weather {
   // ---- background updater (runs on core 0, never blocks the UI) ----
   static void updaterTask(void*) {
     for (;;) {
-      if (Net::online()) {
+      if ((gActive || !gPrimed) && Net::online()) {  // fetch while the app is open, plus one prime pass at boot
         gUpdating = true;
         if (gNCities > 0) {                          // multi-city: geocode (once) then fetch each
           for (int i = 0; i < gNCities; i++) {
@@ -927,9 +929,10 @@ namespace Weather {
           if (fetchInto(lat, lon, city, r)) { store(0, r); gN = 1; }
         }
         gUpdating = false;
+        gPrimed = true;                              // first cycle (boot prime, or while open) populated the cache
       }
-      // sleep until the next cycle, or wake early on refreshNow(); poll faster until Wi-Fi is up.
-      uint32_t wait = Net::online() ? UPDATE_MS : 3000;
+      // sleep until the next cycle / wake early on refreshNow()/setActive(); poll fast until Wi-Fi + the boot prime.
+      uint32_t wait = (!gActive && gPrimed) ? 600000 : (Net::online() ? UPDATE_MS : 3000);   // idle once primed + closed
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait));
     }
   }
@@ -962,6 +965,7 @@ namespace Weather {
   bool updating()      { return gUpdating; }
   uint32_t version()   { return gVersion; }
   void refreshNow()    { if (taskH) xTaskNotifyGive(taskH); }
+  void setActive(bool on) { gActive = on; if (on && taskH) xTaskNotifyGive(taskH); }   // app open -> fetch; closed -> idle
 }
 
 // ===================== Flight (adsb.lol live + adsbdb routes) =====================
@@ -1280,10 +1284,12 @@ namespace Flight {
     return true;
   }
 
+  static volatile bool gActive = false;   // Flight app open -> fetch; closed -> idle (cached snapshot persists)
+  static volatile bool gPrimed = false;   // a one-time boot fetch has run, so first open is never empty
   static void updaterTask(void*) {
     Plane tmp[FLIGHT_SCAN];
     for (;;) {
-      if (Net::online()) {
+      if ((gActive || !gPrimed) && Net::online()) {  // fetch while the app is open, plus one prime pass at boot
         gUpdating = true;
 
         // pending airport lookup -> set the radar's fetch center (fetchNearby below then uses it)
@@ -1359,8 +1365,9 @@ namespace Flight {
         if (!gAirportsDone && fetchAirports()) gAirportsDone = true;   // nearby airports, once
 
         gUpdating = false;
+        gPrimed = true;                              // first cycle (boot prime, or while open) populated the snapshot
       }
-      uint32_t wait = Net::online() ? UPDATE_MS : 3000;
+      uint32_t wait = (!gActive && gPrimed) ? 600000 : (Net::online() ? UPDATE_MS : 3000);   // idle once primed + closed
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait));
     }
   }
@@ -1473,6 +1480,7 @@ namespace Flight {
   uint32_t version() { return gVersion; }
   void refreshNow()  { if (taskH) xTaskNotifyGive(taskH); }
   void setRange(int nm) { gFetchNm = constrain(nm, (int)FLIGHT_RADIUS_NM, 150); }   // never below default; capped
+  void setActive(bool on) { gActive = on; if (on && taskH) xTaskNotifyGive(taskH); }   // app open -> fetch; closed -> idle
 
   void searchAirport(const String& code) {        // UI: center the radar on this airport (async lookup on the task)
     xSemaphoreTake(mtx, portMAX_DELAY); gAptReq = code; gAptCode = ""; gAptName = ""; xSemaphoreGive(mtx);
@@ -1507,6 +1515,10 @@ namespace Stocks {
   static int    gN  = 0;
   static int    gRR = 0;                  // round-robin cursor
   static String gFocus = "";             // ticker whose detail is open (poll priority)
+  static volatile bool gActive = false;  // Stocks app is the active screen (idle polling when closed)
+  static bool gPrimed = false;           // a one-time boot prime pass has run, so first open is never empty
+  static const uint32_t LIST_MS   = 1500; // LIST: round-robin spacing -> ~40 calls/min (headroom under the 60/min cap)
+  static const uint32_t DETAIL_MS = 1100; // DETAIL: poll the one focused ticker -> ~55/min (finer, still < 60)
   static volatile bool gFocusEarn = false;
   static String gSearchQ = "";
   static volatile bool gSearchPending = false;
@@ -1563,6 +1575,7 @@ namespace Stocks {
     xSemaphoreTake(mtx, portMAX_DELAY); bool changed = (s != gFocus); gFocus = s; xSemaphoreGive(mtx);
     if (changed) { gFocusEarn = true; if (taskH) xTaskNotifyGive(taskH); }
   }
+  void setActive(bool on) { gActive = on; if (on && taskH) xTaskNotifyGive(taskH); }   // app open -> poll; closed -> idle
   void requestSearch(const String& q) {
     xSemaphoreTake(mtx, portMAX_DELAY); gSearchQ = q; gMatchN = 0; xSemaphoreGive(mtx);
     gSearchPending = true; bump(); if (taskH) xTaskNotifyGive(taskH);
@@ -1592,15 +1605,21 @@ namespace Stocks {
 
   static void fetchQuote(const String& sym) {
     JsonDocument d;
-    if (!getJson(fhurl("quote?symbol=" + sym), d)) return;
-    float c = d["c"] | 0.0f; if (c <= 0) return;          // no data (bad/halted symbol)
+    bool got = getJson(fhurl("quote?symbol=" + sym), d);
+    float c = got ? (d["c"] | 0.0f) : 0.0f;
+    log_e("[stocks] quote %s got=%d price=%.2f", sym.c_str(), got, c);   // USB diag: confirms polling + value
+    if (!got || c <= 0) return;                          // no data (bad key/symbol, or market not open yet)
+    float ndp = d["dp"] | 0.0f;
+    bool changed = false;
     xSemaphoreTake(mtx, portMAX_DELAY);
     for (int i = 0; i < gN; i++) if (gQ[i].sym == sym) {
+      changed = !gQ[i].valid || gQ[i].price != c || gQ[i].dp != ndp;     // only a real move needs a repaint
       gQ[i].price = c;            gQ[i].high  = d["h"]  | 0.0f; gQ[i].low = d["l"] | 0.0f;
       gQ[i].open  = d["o"] | 0.0f; gQ[i].prevClose = d["pc"] | 0.0f;
-      gQ[i].change = d["d"] | 0.0f; gQ[i].dp = d["dp"] | 0.0f; gQ[i].valid = true; break;
+      gQ[i].change = d["d"] | 0.0f; gQ[i].dp = ndp; gQ[i].valid = true; break;
     }
-    xSemaphoreGive(mtx); bump();
+    xSemaphoreGive(mtx);
+    if (changed) bump();   // bump (-> redraw) only when the price actually moved; static price = no repaint/flicker
   }
   static void fetchEarnings(const String& sym) {
     String date = "none";
@@ -1638,22 +1657,32 @@ namespace Stocks {
   }
 
   static void task(void*) {
-    bool focusTurn = false;
     for (;;) {
       if (gSuspend || !configured() || !Net::online()) { vTaskDelay(pdMS_TO_TICKS(1500)); continue; }
       if (gSearchPending) { doSearch(); vTaskDelay(pdMS_TO_TICKS(900)); continue; }
+      if (!gPrimed) {                              // one-time boot prime: fetch each ticker once, then gate
+        int n; xSemaphoreTake(mtx, portMAX_DELAY); n = gN; xSemaphoreGive(mtx);
+        for (int i = 0; i < n; i++) {
+          String s; xSemaphoreTake(mtx, portMAX_DELAY); s = (i < gN) ? gQ[i].sym : ""; xSemaphoreGive(mtx);
+          if (s.length()) fetchQuote(s);
+          vTaskDelay(pdMS_TO_TICKS(LIST_MS));
+        }
+        gPrimed = true; continue;
+      }
+      if (!gActive) { vTaskDelay(pdMS_TO_TICKS(500)); continue; }   // app closed -> don't poll (cached prices persist)
       xSemaphoreTake(mtx, portMAX_DELAY); String fc = gFocus; xSemaphoreGive(mtx);
       if (gFocusEarn && fc.length()) { gFocusEarn = false; fetchEarnings(fc); vTaskDelay(pdMS_TO_TICKS(900)); continue; }
-      String sym = "";
-      xSemaphoreTake(mtx, portMAX_DELAY);
-      if (gN > 0) {
-        if (focusTurn && fc.length()) { for (int i = 0; i < gN; i++) if (gQ[i].sym == fc) { sym = fc; break; } }
-        if (!sym.length()) { if (gRR >= gN) gRR = 0; sym = gQ[gRR].sym; gRR = (gRR + 1) % gN; }
-        focusTurn = !focusTurn;
+      if (fc.length()) {                                  // DETAIL (single ticker): poll just it, aggressively
+        fetchQuote(fc);
+        vTaskDelay(pdMS_TO_TICKS(DETAIL_MS));
+      } else {                                            // LIST: round-robin all tickers, spaced for rate headroom
+        String sym = "";
+        xSemaphoreTake(mtx, portMAX_DELAY);
+        if (gN > 0) { if (gRR >= gN) gRR = 0; sym = gQ[gRR].sym; gRR = (gRR + 1) % gN; }
+        xSemaphoreGive(mtx);
+        if (sym.length()) fetchQuote(sym);
+        vTaskDelay(pdMS_TO_TICKS(LIST_MS));
       }
-      xSemaphoreGive(mtx);
-      if (sym.length()) fetchQuote(sym);
-      vTaskDelay(pdMS_TO_TICKS(1200));                    // ~50/min, under the 60/min free cap
     }
   }
 
@@ -2119,22 +2148,31 @@ namespace Ota {
   // Fetch + parse the manifest; fills outputs and returns true on a valid read.
   static bool fetchManifest(int& outVer, String& outUrl, String& outNotes, int& outCode) {
     outCode = 0;                                                      // <=0 => never reached the server; 200 => got the manifest
-    if (!Net::online() || !ClockService::synced()) return false;     // TLS needs a real clock
+    if (!Net::online() || !ClockService::synced()) {                 // TLS needs a real clock
+      log_e("[ota] skip fetch: online=%d synced=%d", Net::online(), ClockService::synced());
+      return false;
+    }
+    String url = otaManifestUrl();                                   // board-scoped URL (PUCK_OTA_SUFFIX)
     WiFiClientSecure tls; tls.setCACert(MQTT_CA_CERT); tls.setHandshakeTimeout(15);
     HTTPClient http; http.setConnectTimeout(10000); http.setTimeout(12000);
-    if (!http.begin(tls, otaManifestUrl())) return false;            // board-scoped URL (PUCK_OTA_SUFFIX)
+    if (!http.begin(tls, url)) { log_e("[ota] http.begin failed: %s", url.c_str()); return false; }
     int code = http.GET(); outCode = code; bool ok = false;
     if (code == 200) {
       JsonDocument doc;
-      if (!deserializeJson(doc, http.getString())) {
+      DeserializationError je = deserializeJson(doc, http.getString());
+      if (!je) {
         outVer   = doc["version"] | 0;
         outUrl   = String((const char*)(doc["url"]   | ""));
         outNotes = String((const char*)(doc["notes"] | ""));
         const char* board = doc["board"] | "";                       // defense in depth: refuse another board's image
         ok = (outVer > 0 && outUrl.length() && (!board[0] || strcmp(board, PUCK_BOARD_ID) == 0));
-      }
+        if (!ok) log_e("[ota] manifest rejected: ver=%d urlLen=%d board='%s' (mine=%s)", outVer, outUrl.length(), board, PUCK_BOARD_ID);
+      } else log_e("[ota] manifest JSON parse error: %s", je.c_str());
     }
-    log_e("[ota] manifest http=%d ok=%d ver=%d cur=%d heap=%u", code, ok, outVer, FW_VERSION, (unsigned)ESP.getFreeHeap());
+    // http<0 = TLS/connect failure (a negative HTTPClient error); time= is the device clock (epoch) — if it's
+    // before the server cert's notBefore, TLS rejects a freshly-renewed cert even though the host is up.
+    log_e("[ota] manifest url=%s http=%d ok=%d ver=%d cur=%d time=%ld heap=%u",
+          url.c_str(), code, ok, outVer, FW_VERSION, (long)time(nullptr), (unsigned)ESP.getFreeHeap());
     http.end();
     return ok;
   }
@@ -2148,6 +2186,7 @@ namespace Ota {
     if (!http.begin(tls, url)) return false;
     int code = http.GET();
     bool ok = (code == 200) && !deserializeJson(doc, http.getString());
+    log_e("[ota] getJson url=%s http=%d ok=%d", url, code, ok);
     http.end();
     return ok;
   }
@@ -2228,7 +2267,7 @@ namespace Ota {
                 gAvailVer = v; setError(""); setPhase(AVAILABLE);     // -> confirm overlay pops in main.cpp
               } else { setError(""); setPhase(IDLE); }                // up to date, or postponed by "Later"
             } else if (code == 200) { setError(""); setPhase(IDLE); } // reached the server, manifest just has nothing newer -> "up to date"
-            else { setError("server unreachable"); setPhase(IDLE); } // no HTTP 200 (connect/TLS failed) -> genuinely unreachable
+            else { setError(String("server unreachable (") + code + ")"); setPhase(IDLE); } // no HTTP 200; code<0 = connect/TLS failure (shown on-screen for diagnosis)
           }
         }
       }

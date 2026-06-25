@@ -3,6 +3,7 @@
 #include "App.h"
 #include "services.h"
 #include "config.h"
+#include "layout.h"
 
 // ---------------- Clock ----------------
 // Big local time that slowly drifts (anti-burn-in) + up to MAX_WORLD_CITIES world-clock rows.
@@ -315,6 +316,7 @@ public:
     if (showDetail) { showDetail = false; shownVer = 0xFFFFFFFF; shownHas = false; return true; }
     return false;
   }
+  void onExit() override { Weather::setActive(false); }   // stop background fetches when the app closes
 
   void onEnter() override {
     shownVer = 0xFFFFFFFF; shownUpdating = false; shownHas = false; showDetail = false;
@@ -323,6 +325,7 @@ public:
       haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr);
     }
     puck::display().fillScreen(BLACK);
+    Weather::setActive(true); // resume fetching while the app is open
     Weather::refreshNow();    // ask for a fresh pull on open...
     loop();                   // ...but paint whatever we already have right now
   }
@@ -420,6 +423,7 @@ class StocksApp : public App {
   String selSym;                                // DETAIL: the focused ticker
   String typed;                                 // SEARCH: typed symbol
   int    focusIdx = 0;                          // button-nav cursor
+  int    order[MAX_STOCKS]; int orderN = 0;     // LIST display order (indices into the watchlist), sorted by top movers
 
   const char* kbRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
   static const int KW = 32, KH = 30, KB_TOP = 58;
@@ -441,13 +445,40 @@ class StocksApp : public App {
     ry += 18;
   }
 
+  void drawBackInto(lgfx::LovyanGFX* t) {        // composite the back chip into the off-screen target -> atomic blit (no flicker)
+    int o = layout::inset();
+    t->fillRoundRect(4 + o, 4 + o, 34, 24, 5, DARKGREY);
+    t->setTextDatum(middle_center); t->setFont(&fonts::Font0); t->setTextSize(2);
+    t->setTextColor(WHITE, DARKGREY); t->drawString("<", 21 + o, 16 + o);
+  }
+
+  // LIST display order: sort the watchlist by |% change| descending (biggest movers, up or down, on
+  // top); tickers with no quote yet sink to the bottom. drawList + the tap/focus hit-test all read order[].
+  void computeOrder() {
+    int n = Stocks::count();
+    Stocks::Quote q[MAX_STOCKS];
+    for (int i = 0; i < n; i++) { Stocks::get(i, q[i]); order[i] = i; }
+    for (int a = 1; a < n; a++) {                       // insertion sort by |dp| desc (stable for ties)
+      int key = order[a];
+      float ka = q[key].valid ? fabsf(q[key].dp) : -1.0f;
+      int b = a - 1;
+      while (b >= 0) {
+        float kb = q[order[b]].valid ? fabsf(q[order[b]].dp) : -1.0f;
+        if (kb >= ka) break;
+        order[b + 1] = order[b]; b--;
+      }
+      order[b + 1] = key;
+    }
+    orderN = n;
+  }
+
   // ---- LIST (off-screen) ----
   void drawList() {
     g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
     int w = g->width(), h = g->height();
     g->fillScreen(BLACK);
-    g->setTextDatum(top_left); g->setFont(&fonts::Font0); g->setTextSize(2);
-    g->setTextColor(CYAN, BLACK); g->drawString("Stocks", 10, 8);
+    g->setTextDatum(top_center); g->setFont(&fonts::Font0); g->setTextSize(2);
+    g->setTextColor(CYAN, BLACK); g->drawString("Stocks", w / 2, 8);   // centered, clear of the top-left back chip
 
     if (!Stocks::configured()) {
       g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(ORANGE, BLACK);
@@ -458,10 +489,10 @@ class StocksApp : public App {
       g->drawString("Tap + to add", w / 2, h / 2 - 8);
       g->drawString("a ticker", w / 2, h / 2 + 18);
     } else {
-      int n = Stocks::count();
-      for (int i = 0; i < n; i++) {
-        Stocks::Quote q; if (!Stocks::get(i, q)) continue;
-        int y = LIST_TOP + i * ROW_H + ROW_H / 2;
+      computeOrder();                            // sort by top movers (|% change| desc)
+      for (int k = 0; k < orderN; k++) {
+        Stocks::Quote q; if (!Stocks::get(order[k], q)) continue;
+        int y = LIST_TOP + k * ROW_H + ROW_H / 2;
         g->setFont(&fonts::Font0); g->setTextSize(2);
         g->setTextDatum(middle_left); g->setTextColor(WHITE, BLACK); g->drawString(q.sym, 12, y);
         if (q.valid) {
@@ -484,6 +515,7 @@ class StocksApp : public App {
       g->setTextDatum(middle_center); g->setFont(&fonts::Font0); g->setTextSize(2);
       g->setTextColor(GREEN, BLACK); g->drawString("+ Add ticker", w / 2, ay + 12);
     }
+    drawBackInto(g);                            // chip in the composition -> no flicker on refresh
     if (haveScope) scope.pushSprite(0, 0);
     g = &puck::display();
   }
@@ -504,6 +536,7 @@ class StocksApp : public App {
     if (!ok || !q.valid) {
       g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
       g->drawString("loading...", w / 2, h / 2);
+      drawBackInto(g);
       if (haveScope) scope.pushSprite(0, 0); g = &puck::display(); return;
     }
 
@@ -528,6 +561,7 @@ class StocksApp : public App {
     g->setTextDatum(middle_center); g->setFont(&fonts::Font0); g->setTextSize(2);
     g->setTextColor(RED, BLACK); g->drawString("Remove", w / 2, ay + 12);
 
+    drawBackInto(g);                            // chip in the composition -> no flicker on refresh
     if (haveScope) scope.pushSprite(0, 0);
     g = &puck::display();
   }
@@ -598,6 +632,7 @@ class StocksApp : public App {
         g->drawString(d, w - 12, y);
       }
     }
+    drawBackInto(g);
     if (haveScope) scope.pushSprite(0, 0);
     g = &puck::display();
   }
@@ -618,9 +653,10 @@ public:
     mode = LIST; selSym = ""; typed = ""; focusIdx = 0;
     beginScope();
     shownVer = 0xFFFFFFFF; dirty = true;
+    Stocks::setActive(true);                 // resume polling while the app is open
     puck::display().fillScreen(BLACK);
   }
-  void onExit() override { Stocks::setFocus(""); }
+  void onExit() override { Stocks::setFocus(""); Stocks::setActive(false); }   // idle polling when closed (cached prices persist)
 
   bool onBack() override {
     if (mode == DETAIL)  { mode = LIST;   Stocks::setFocus(""); focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; return true; }
@@ -635,11 +671,11 @@ public:
       int x = gTap.x, y = gTap.y;
       if (mode == LIST) {
         if (Stocks::configured()) {
-          int n = Stocks::count(), ay = addY();
+          int ay = addY();
           if (y >= ay && y < ay + 24) { mode = SEARCH; typed = ""; focusIdx = 0; dirty = true; }
-          else if (y >= LIST_TOP && y < LIST_TOP + n * ROW_H) {
-            int i = (y - LIST_TOP) / ROW_H; Stocks::Quote q;
-            if (i >= 0 && i < n && Stocks::get(i, q)) { selSym = q.sym; Stocks::setFocus(selSym); mode = DETAIL; focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; }
+          else if (y >= LIST_TOP && y < LIST_TOP + orderN * ROW_H) {   // rows are in sorted (top-mover) order
+            int k = (y - LIST_TOP) / ROW_H; Stocks::Quote q;
+            if (k >= 0 && k < orderN && Stocks::get(order[k], q)) { selSym = q.sym; Stocks::setFocus(selSym); mode = DETAIL; focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; }
           }
         }
       } else if (mode == DETAIL) {
@@ -1436,9 +1472,10 @@ public:
       scope.setColorDepth(16); scope.setPsram(true);
       haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr);
     }
+    Flight::setActive(true);                // resume fetching while the app is open
     Flight::refreshNow();
   }
-  void onExit() override { Flight::track(""); Flight::setRange(FLIGHT_RADIUS_NM); }   // stop tracking + reset search radius
+  void onExit() override { Flight::track(""); Flight::setRange(FLIGHT_RADIUS_NM); Flight::setActive(false); }   // stop tracking + idle fetches
 
   void loop() override {
     uint32_t ver = Flight::version();

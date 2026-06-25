@@ -51,11 +51,19 @@ symbol with one button is impractical). On the single-button CoreS3 that's power
 
 ## How it works
 
-- **Background updater** (`Stocks::begin`): a FreeRTOS task pinned to **core 0** that
-  **round-robin polls** one ticker's quote at a time (~1.2 s apart, ≈50 req/min — under
-  Finnhub's **60/min** free cap), so a ~5-ticker list refreshes about every 5 s and the
-  rate stays safe no matter how many tickers you add. The ticker whose detail is open is
-  polled on every other tick so its page feels live. Blocking HTTPS never touches the UI loop.
+- **Background updater** (`Stocks::begin`): a FreeRTOS task pinned to **core 0** with a
+  **context-aware cadence** so it stays well under Finnhub's **60/min** free cap:
+  - **LIST screen** — round-robins one ticker at a time every **1.5 s** (`LIST_MS`, ≈40
+    req/min), leaving headroom for the occasional earnings/search call. Each ticker thus
+    refreshes every `N × 1.5 s`.
+  - **DETAIL screen** — polls **only** the open ticker every **1.1 s** (`DETAIL_MS`, ≈55
+    req/min) for finer updates on the one you're watching.
+  - **App closed** — idles entirely (no polling); the last-fetched prices stay cached, so
+    reopening shows them instantly and they refresh from there.
+
+  Driven by `setActive()` (app open/closed) + `setFocus()` (detail ticker). Blocking HTTPS
+  never touches the UI loop. Repaints fire only when a price actually moves, so a static
+  (market-closed) quote causes no needless redraw.
 - **Endpoints** (all `https://finnhub.io/api/v1/…`, `WiFiClientSecure` + `setInsecure()`
   like the other non-OTA data fetches): `/quote` (current `c` + day high `h` / low `l` /
   open `o` / prev-close `pc` / change `d` / percent `dp`); `/calendar/earnings`

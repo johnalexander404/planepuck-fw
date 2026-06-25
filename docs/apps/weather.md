@@ -43,8 +43,10 @@ part. The ring cycles cells (`focusMove`), and SELECT opens the focused city's d
 ## How it works
 
 - **Background updater** (`Weather::begin`): a FreeRTOS task pinned to **core 0**,
-  refreshing every **60 s** (`UPDATE_MS`) or immediately on `refreshNow()` (which
-  `onEnter()` calls). Blocking HTTP never touches the UI loop.
+  refreshing every **60 s** (`UPDATE_MS`) — but **only while the Weather app is open**
+  (`setActive(true)` in `onEnter`, `false` in `onExit`; it idles and serves the cached
+  reading otherwise, so nothing fetches in the background) — or immediately on
+  `refreshNow()` (which `onEnter()` calls). Blocking HTTP never touches the UI loop.
 - **On-device geocoding** (`geocodeQuery`, once per city, then cached on the `WCity`): a
   5-digit US ZIP → Zippopotam; any other name → Open-Meteo's geocoder. Same-named cities
   resolve to the **most-populous** hit; a trailing `City, CC` qualifier (e.g. `Kochi, IN`)
