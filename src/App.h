@@ -17,5 +17,12 @@ public:
   virtual bool needsNet() const { return false; }   // true = show a "finish setup" prompt until Wi-Fi is set
   virtual bool dimsWhenIdle() const { return false; }  // true = let the screen auto-dim on this app (Clock only)
   virtual bool onBack() { return false; }              // back chip: true = handled in-app (e.g. radar->list); false = exit to launcher
+
+  // ---- Physical-button navigation (optional; default = touch-only) ----
+  // focusCount()==0 means the app doesn't take part in button nav; touch keeps working regardless.
+  virtual int  focusCount() { return 0; }              // focusable items on the current screen
+  virtual void focusMove(int delta) {}                 // advance (+1) / retreat (-1); wraps
+  virtual void focusSelect() {}                        // activate the focused item (same as a tap on it)
+  virtual void drawFocus() {}                          // overlay a highlight on the focused item (button mode)
   virtual ~App() {}
 };

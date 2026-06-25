@@ -106,6 +106,8 @@ void drawAppIcon(const char* name, int cx, int cy, uint16_t chip) {
 }
 
 uint32_t gLauncherIdleSince = 0;   // millis() of last launcher activity (drives idle -> Clock)
+bool     gButtonMode    = false;   // a physical button was used -> show focus highlights (a touch hides them)
+int      gLauncherFocus = 0;       // focused launcher chip while in button mode
 
 void drawLauncher() {
   static const uint16_t palette[] = { CYAN, ORANGE, GREEN, MAGENTA, YELLOW, RED };
@@ -124,6 +126,11 @@ void drawLauncher() {
     uint16_t col = palette[i % pn];
     puck::display().fillSmoothCircle(cx, cy, CHIP_R, col);   // solid, anti-aliased chip
     drawAppIcon(apps[i]->name, cx, cy, col);            // vector glyph on top
+  }
+  if (gButtonMode) {                                    // button nav: ring the focused chip
+    int cx, cy; launcherChipPos(gLauncherFocus, cx, cy);
+    puck::display().drawCircle(cx, cy, CHIP_R + 3, WHITE);
+    puck::display().drawCircle(cx, cy, CHIP_R + 4, WHITE);
   }
   gLauncherIdleSince = millis();                        // (re)start the idle -> Clock countdown
 }
@@ -441,9 +448,23 @@ void loop() {
   auto d = puck::Touch::get(0);
   if (d.pressed) { gTap.pressed = true; gTap.x = d.x; gTap.y = d.y; }
   if (gTap.pressed) {
+    gButtonMode = false;                 // touch -> hide the focus highlight (touch is the active input)
     bool wasDimmed = Dim::dimmed();      // check before waking
     Dim::wake();
     if (wasDimmed) gTap.pressed = false; // screen was dimmed -> this tap only brightens it, no app action
+  }
+
+  // physical-button events for this frame (additive to touch; dormant until the first button press)
+  bool bN = false, bP = false, bS = false, bB = false;
+  {
+    bool n = puck::Buttons::nextPressed(),   p = puck::Buttons::prevPressed(),
+         s = puck::Buttons::selectPressed(), b = puck::Buttons::backPressed();
+    if (n || p || s || b) {
+      bool wasDimmed = Dim::dimmed();
+      Dim::wake();
+      gButtonMode = true;
+      if (!wasDimmed) { bN = n; bP = p; bS = s; bB = b; }  // when dimmed, the first press only wakes
+    }
   }
 
   // always-on services
@@ -530,17 +551,25 @@ void loop() {
     if (gTap.pressed && gTap.x < 40 && gTap.y < 30) {   // back chip (always available)
       gTap.pressed = false;
       if (!active->onBack()) backToLauncher();          // let the app step back a level first (e.g. radar->list)
+    } else if (bB) {                                    // physical back button (>=2-button boards)
+      if (!active->onBack()) backToLauncher();
     } else if (active->needsNet() && !Settings::haveWifi()) {  // unconfigured -> prompt, not empty data
       if (!gSetupShown) { drawSetupNeeded(); drawBackChip(); gSetupShown = true; }
       Notify::draw();
       if (gTap.pressed) { gTap.pressed = false; active = &setupApp; gSetupShown = false; active->onEnter(); }
     } else {
+      if (active->focusCount() > 0) {                   // button focus nav (no-op for touch-only screens)
+        if (bP) active->focusMove(-1);
+        if (bN) active->focusMove(1);
+        if (bS) active->focusSelect();
+      }
       active->loop();
       drawBackChip();
+      if (gButtonMode && active->focusCount() > 0) active->drawFocus();
       Notify::draw();
     }
   } else {
-    if (gTap.pressed) {                                  // launcher chip pick
+    if (gTap.pressed) {                                  // launcher chip pick (touch)
       gLauncherIdleSince = millis();                     // any tap resets the idle countdown
       for (int i = 0; i < APP_COUNT; i++) {
         int cx, cy; launcherChipPos(i, cx, cy);
@@ -548,6 +577,12 @@ void loop() {
         if (dx * dx + dy * dy <= CHIP_R * CHIP_R) { enterApp(i); break; }
       }
       gTap.pressed = false;
+    } else if (bS) {                                     // button: open the focused chip
+      gLauncherIdleSince = millis(); enterApp(gLauncherFocus);
+    } else if (bN || bP) {                               // button: rotate focus around the ring
+      gLauncherIdleSince = millis();
+      gLauncherFocus = (gLauncherFocus + (bN ? 1 : APP_COUNT - 1)) % APP_COUNT;
+      drawLauncher();                                    // redraw to move the highlight
     } else if (millis() - gLauncherIdleSince >= LAUNCHER_IDLE_MS) {
       enterApp(0);                                       // idle on home -> open the Clock (apps[0])
     }
