@@ -135,6 +135,16 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 #define WEATHER_LON      "-122.42"
 #define WEATHER_CITY     "San Francisco"
 
+// ---- Stocks (Finnhub; free) ----
+// Live quotes + day high/low + upcoming earnings + symbol search for the Stocks app. The key is
+// normally entered PER-DEVICE in the on-device captive portal (Settings -> "Stocks") and saved to
+// NVS, so leave this BLANK for shared/CI builds — it's only a compile-time fallback default (same
+// pattern as MQTT_PASS). Each device calls finnhub.io directly with its own key. Get a free key at
+// finnhub.io. Blank here AND on-device = the Stocks app shows "set FINNHUB_API_KEY". Free tier is
+// 60 req/min; the watchlist polls round-robin (~1 symbol/sec) per device to stay under it.
+#define FINNHUB_API_KEY   ""
+#define MAX_STOCKS        8           // watchlist size cap
+
 // ---- Flight tracking (adsb.lol, no API key) ----
 #define FLIGHT_RADIUS_NM  30          // search radius around your location (nautical miles)
 

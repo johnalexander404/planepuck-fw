@@ -402,6 +402,296 @@ public:
   void drawFocus() override { int x, y, w, h; if (focusCell(focusIdx, x, y, w, h)) puck::display().drawRoundRect(x + 2, y + 2, w - 4, h - 4, 4, WHITE); }
 };
 
+// ---------------- Stocks ----------------
+// LIST: watchlist rows (ticker + price + % change), refreshed every few seconds from the Stocks
+// service; tap a row for DETAIL (day high/low, open, prev close, next earnings). "+ Add ticker"
+// opens a keyboard SEARCH -> RESULTS (Finnhub symbol search) -> tap a match to add. The LIST/DETAIL
+// screens compose off-screen so the periodic price refresh never flickers. Needs FINNHUB_API_KEY.
+class StocksApp : public App {
+  enum Mode { LIST, DETAIL, SEARCH, RESULTS };
+  Mode mode = LIST;
+
+  puck::Canvas scope{&puck::display()};        // off-screen buffer (PSRAM) -> flicker-free refresh
+  bool haveScope = false;
+  lgfx::LovyanGFX* g = &puck::display();        // draw target: the sprite during a repaint, else the panel
+  uint32_t shownVer = 0xFFFFFFFF;
+  bool dirty = true;
+
+  String selSym;                                // DETAIL: the focused ticker
+  String typed;                                 // SEARCH: typed symbol
+  int    focusIdx = 0;                          // button-nav cursor
+
+  const char* kbRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
+  static const int KW = 32, KH = 30, KB_TOP = 58;
+  static const int LIST_TOP = 34, ROW_H = 22;   // watchlist rows
+  static const int RES_TOP  = 30, RES_H = 26;   // search-result rows
+  int addY()  { return puck::display().height() - 28; }   // +Add / Remove button row
+  static uint16_t dirColor(float d) { return d > 0 ? GREEN : (d < 0 ? RED : DARKGREY); }
+
+  void beginScope() {
+    if (!haveScope) {
+      scope.setColorDepth(16); scope.setPsram(true);
+      haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr);
+    }
+  }
+  void statRow(int& ry, const char* k, const String& v, uint16_t vc) {   // draws a label/value line to g
+    g->setFont(&fonts::Font0); g->setTextSize(2);
+    g->setTextDatum(middle_left);  g->setTextColor(DARKGREY, BLACK); g->drawString(k, 16, ry);
+    g->setTextDatum(middle_right); g->setTextColor(vc, BLACK);       g->drawString(v, g->width() - 16, ry);
+    ry += 18;
+  }
+
+  // ---- LIST (off-screen) ----
+  void drawList() {
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
+    int w = g->width(), h = g->height();
+    g->fillScreen(BLACK);
+    g->setTextDatum(top_left); g->setFont(&fonts::Font0); g->setTextSize(2);
+    g->setTextColor(CYAN, BLACK); g->drawString("Stocks", 10, 8);
+
+    if (!Stocks::configured()) {
+      g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(ORANGE, BLACK);
+      g->drawString("set", w / 2, h / 2 - 16);
+      g->setTextSize(1); g->drawString("FINNHUB_API_KEY", w / 2, h / 2 + 10);
+    } else if (Stocks::count() == 0) {
+      g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
+      g->drawString("Tap + to add", w / 2, h / 2 - 8);
+      g->drawString("a ticker", w / 2, h / 2 + 18);
+    } else {
+      int n = Stocks::count();
+      for (int i = 0; i < n; i++) {
+        Stocks::Quote q; if (!Stocks::get(i, q)) continue;
+        int y = LIST_TOP + i * ROW_H + ROW_H / 2;
+        g->setFont(&fonts::Font0); g->setTextSize(2);
+        g->setTextDatum(middle_left); g->setTextColor(WHITE, BLACK); g->drawString(q.sym, 12, y);
+        if (q.valid) {
+          char pr[16]; snprintf(pr, sizeof pr, "$%.2f", q.price);
+          char ch[12]; snprintf(ch, sizeof ch, "%+.2f%%", q.dp);
+          uint16_t col = dirColor(q.change);
+          g->setTextDatum(middle_right); g->setTextSize(2); g->setTextColor(col, BLACK);
+          g->drawString(pr, w - 12, y);
+          int pw = g->textWidth(pr);
+          g->setTextSize(1); g->drawString(ch, w - 12 - pw - 10, y);
+        } else {
+          g->setTextDatum(middle_right); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
+          g->drawString("...", w - 12, y);
+        }
+      }
+    }
+    if (Stocks::configured()) {                 // + Add ticker
+      int ay = addY();
+      g->drawRoundRect(8, ay, w - 16, 24, 5, GREEN);
+      g->setTextDatum(middle_center); g->setFont(&fonts::Font0); g->setTextSize(2);
+      g->setTextColor(GREEN, BLACK); g->drawString("+ Add ticker", w / 2, ay + 12);
+    }
+    if (haveScope) scope.pushSprite(0, 0);
+    g = &puck::display();
+  }
+
+  // ---- DETAIL (off-screen; refreshes with the price) ----
+  void drawDetail() {
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
+    int w = g->width(), h = g->height();
+    g->fillScreen(BLACK);
+
+    Stocks::Quote q; bool ok = false;
+    int n = Stocks::count();
+    for (int i = 0; i < n; i++) { Stocks::Quote t; if (Stocks::get(i, t) && t.sym == selSym) { q = t; ok = true; break; } }
+
+    g->setTextDatum(top_center); g->setFont(&fonts::Font0); g->setTextSize(3);
+    g->setTextColor(CYAN, BLACK); g->drawString(selSym, w / 2, 24);   // below the top-left back chip
+
+    if (!ok || !q.valid) {
+      g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
+      g->drawString("loading...", w / 2, h / 2);
+      if (haveScope) scope.pushSprite(0, 0); g = &puck::display(); return;
+    }
+
+    uint16_t col = dirColor(q.change);
+    char pr[16]; snprintf(pr, sizeof pr, "$%.2f", q.price);
+    g->setTextDatum(top_center); g->setTextSize(3); g->setTextColor(WHITE, BLACK);
+    g->drawString(pr, w / 2, 56);
+    char ch[28]; snprintf(ch, sizeof ch, "%+.2f (%+.2f%%)", q.change, q.dp);
+    g->setTextSize(2); g->setTextColor(col, BLACK); g->drawString(ch, w / 2, 92);
+
+    int ry = 124; char b[16];
+    snprintf(b, sizeof b, "$%.2f", q.high);      statRow(ry, "Day High",   b, WHITE);
+    snprintf(b, sizeof b, "$%.2f", q.low);       statRow(ry, "Day Low",    b, WHITE);
+    snprintf(b, sizeof b, "$%.2f", q.open);      statRow(ry, "Open",       b, DARKGREY);
+    snprintf(b, sizeof b, "$%.2f", q.prevClose); statRow(ry, "Prev Close", b, DARKGREY);
+    bool haveEarn = q.earnings.length() && q.earnings != "none";
+    String e = (q.earnings.length() == 0) ? String("...") : (haveEarn ? q.earnings : String("--"));
+    statRow(ry, "Next earnings", e, haveEarn ? ORANGE : DARKGREY);
+
+    int ay = addY();                            // Remove
+    g->drawRoundRect(8, ay, w - 16, 24, 5, RED);
+    g->setTextDatum(middle_center); g->setFont(&fonts::Font0); g->setTextSize(2);
+    g->setTextColor(RED, BLACK); g->drawString("Remove", w / 2, ay + 12);
+
+    if (haveScope) scope.pushSprite(0, 0);
+    g = &puck::display();
+  }
+
+  // ---- SEARCH keyboard (interactive -> drawn directly) ----
+  void drawSearch() {
+    int w = puck::display().width();
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(top_center); puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
+    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("type a ticker symbol", w / 2, 4);
+    puck::display().setTextDatum(middle_center); puck::display().setTextSize(3); puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString(typed.length() ? typed : String("_"), w / 2, 28);
+    puck::display().setTextSize(2);
+    for (int r = 0; r < 4; r++) {
+      const char* row = kbRows[r];
+      for (int i = 0; row[i]; i++) {
+        int x = i * KW, y = KB_TOP + r * KH;
+        puck::display().drawRoundRect(x + 1, y + 1, KW - 2, KH - 2, 3, DARKGREY);
+        char s[2] = { row[i], 0 };
+        puck::display().setTextColor(CYAN, BLACK); puck::display().drawString(s, x + KW / 2, y + KH / 2);
+      }
+    }
+    int by = KB_TOP + 4 * KH;
+    const char* labels[2] = { "DEL", "SEARCH" }; uint16_t cols[2] = { ORANGE, GREEN };
+    for (int i = 0; i < 2; i++) {
+      int x = i * (w / 2);
+      puck::display().drawRoundRect(x + 2, by + 1, w / 2 - 4, 34, 4, cols[i]);
+      puck::display().setTextColor(cols[i], BLACK); puck::display().drawString(labels[i], x + (w / 2) / 2, by + 18);
+    }
+  }
+  void handleSearchTap(int x, int y) {
+    int w = puck::display().width(); int by = KB_TOP + 4 * KH;
+    if (y >= by) {
+      int b = x / (w / 2);
+      if (b == 0) { if (typed.length()) typed.remove(typed.length() - 1); dirty = true; }
+      else if (b == 1 && typed.length()) { Stocks::requestSearch(typed); mode = RESULTS; focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; }
+      return;
+    }
+    int r = (y - KB_TOP) / KH;
+    if (r >= 0 && r < 4) {
+      const char* row = kbRows[r]; int i = x / KW;
+      if (i >= 0 && i < (int)strlen(row)) { if (typed.length() < 6) typed += row[i]; dirty = true; }
+    }
+  }
+
+  // ---- RESULTS (off-screen; matches arrive async so it redraws on version bump) ----
+  void drawResults() {
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
+    int w = g->width(), h = g->height();
+    g->fillScreen(BLACK);
+    g->setTextDatum(top_center); g->setFont(&fonts::Font0); g->setTextSize(2); g->setTextColor(CYAN, BLACK);
+    g->drawString(typed, w / 2, 6);
+    if (Stocks::searchPending()) {
+      g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
+      g->drawString("searching...", w / 2, h / 2);
+    } else {
+      Stocks::Match m[8]; int n = Stocks::searchResults(m, 8);
+      if (n == 0) {
+        g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
+        g->drawString("no matches", w / 2, h / 2);
+      }
+      for (int i = 0; i < n; i++) {
+        int y = RES_TOP + i * RES_H + RES_H / 2;
+        g->setTextDatum(middle_left); g->setFont(&fonts::Font0); g->setTextSize(2);
+        g->setTextColor(WHITE, BLACK); g->drawString(m[i].sym, 12, y);
+        String d = m[i].desc; if (d.length() > 24) d = d.substring(0, 24);
+        g->setTextDatum(middle_right); g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
+        g->drawString(d, w - 12, y);
+      }
+    }
+    if (haveScope) scope.pushSprite(0, 0);
+    g = &puck::display();
+  }
+  void handleResultsTap(int x, int y) {
+    if (Stocks::searchPending() || y < RES_TOP) return;
+    Stocks::Match m[8]; int n = Stocks::searchResults(m, 8);
+    int i = (y - RES_TOP) / RES_H;
+    if (i >= 0 && i < n) { Stocks::add(m[i].sym); typed = ""; mode = LIST; focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; }
+  }
+
+public:
+  StocksApp() : App("Stocks") {}
+  bool needsNet() const override { return true; }
+  bool needsSetup() const override { return !Stocks::configured(); }      // no Finnhub key -> route to Settings on open
+  const char* setupHint() const override { return "Add a Finnhub key"; }
+
+  void onEnter() override {
+    mode = LIST; selSym = ""; typed = ""; focusIdx = 0;
+    beginScope();
+    shownVer = 0xFFFFFFFF; dirty = true;
+    puck::display().fillScreen(BLACK);
+  }
+  void onExit() override { Stocks::setFocus(""); }
+
+  bool onBack() override {
+    if (mode == DETAIL)  { mode = LIST;   Stocks::setFocus(""); focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; return true; }
+    if (mode == RESULTS) { mode = SEARCH; focusIdx = 0; dirty = true; return true; }
+    if (mode == SEARCH)  { mode = LIST;   focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; return true; }
+    return false;
+  }
+
+  void loop() override {
+    uint32_t ver = Stocks::version();
+    if (gTap.pressed) {
+      int x = gTap.x, y = gTap.y;
+      if (mode == LIST) {
+        if (Stocks::configured()) {
+          int n = Stocks::count(), ay = addY();
+          if (y >= ay && y < ay + 24) { mode = SEARCH; typed = ""; focusIdx = 0; dirty = true; }
+          else if (y >= LIST_TOP && y < LIST_TOP + n * ROW_H) {
+            int i = (y - LIST_TOP) / ROW_H; Stocks::Quote q;
+            if (i >= 0 && i < n && Stocks::get(i, q)) { selSym = q.sym; Stocks::setFocus(selSym); mode = DETAIL; focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; }
+          }
+        }
+      } else if (mode == DETAIL) {
+        int ay = addY();
+        if (y >= ay && y < ay + 24) { Stocks::remove(selSym); Stocks::setFocus(""); mode = LIST; focusIdx = 0; shownVer = 0xFFFFFFFF; dirty = true; }
+      } else if (mode == SEARCH)  handleSearchTap(x, y);
+      else if (mode == RESULTS)   handleResultsTap(x, y);
+      gTap.pressed = false;
+    }
+
+    bool dataMode = (mode != SEARCH);            // SEARCH redraws only on key taps (no price-tick flicker)
+    if (dirty || (dataMode && ver != shownVer)) {
+      switch (mode) {
+        case LIST:    drawList();    break;
+        case DETAIL:  drawDetail();  break;
+        case SEARCH:  drawSearch();  break;
+        case RESULTS: drawResults(); break;
+      }
+      shownVer = ver; dirty = false;
+    }
+  }
+
+  // ---- button nav ----
+  int focusCount() override {
+    if (mode == LIST)    return Stocks::configured() ? Stocks::count() + 1 : 0;   // rows + Add
+    if (mode == DETAIL)  return 1;                                                // Remove
+    if (mode == RESULTS) { Stocks::Match m[8]; return Stocks::searchPending() ? 0 : Stocks::searchResults(m, 8); }
+    return 0;                                                                     // SEARCH = touch only
+  }
+  void focusMove(int d) override { int n = focusCount(); if (!n) return; focusIdx = (focusIdx + d + n) % n; dirty = true; }
+  void focusSelect() override {
+    int fc = focusCount(); if (!fc) return; if (focusIdx >= fc) focusIdx = 0;
+    int w = puck::display().width();
+    if (mode == LIST) {
+      int n = Stocks::count();
+      if (focusIdx < n) { gTap.pressed = true; gTap.x = 40; gTap.y = LIST_TOP + focusIdx * ROW_H + ROW_H / 2; }
+      else              { gTap.pressed = true; gTap.x = w / 2; gTap.y = addY() + 12; }       // Add
+    } else if (mode == DETAIL)  { gTap.pressed = true; gTap.x = w / 2; gTap.y = addY() + 12; } // Remove
+    else if (mode == RESULTS)   { gTap.pressed = true; gTap.x = 40; gTap.y = RES_TOP + focusIdx * RES_H + RES_H / 2; }
+  }
+  void drawFocus() override {
+    int fc = focusCount(); if (!fc) return; if (focusIdx >= fc) focusIdx = 0;
+    int w = puck::display().width();
+    if (mode == LIST) {
+      int n = Stocks::count();
+      if (focusIdx < n) puck::display().drawRect(4, LIST_TOP + focusIdx * ROW_H, w - 8, ROW_H, WHITE);
+      else              puck::display().drawRoundRect(8, addY(), w - 16, 24, 5, WHITE);
+    } else if (mode == DETAIL)  puck::display().drawRoundRect(8, addY(), w - 16, 24, 5, WHITE);
+    else if (mode == RESULTS)   puck::display().drawRect(4, RES_TOP + focusIdx * RES_H, w - 8, RES_H, WHITE);
+  }
+};
+
 // ---------------- Flight ----------------
 // LIST: nearest aircraft (tap a row for detail). SEARCH: on-screen keyboard to
 // type a flight number, then track it. DETAIL: speed/altitude/heading/route for

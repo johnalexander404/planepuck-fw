@@ -11,10 +11,11 @@ Tap gTap;   // definition (declared extern in App.h)
 ClockApp clockApp;
 EmojiApp emojiApp;
 WeatherApp weatherApp;
+StocksApp stocksApp;
 FlightApp flightApp;
 SetupApp setupApp;
 FriendsApp friendsApp;
-App* apps[] = { &clockApp, &emojiApp, &weatherApp, &flightApp, &setupApp, &friendsApp };
+App* apps[] = { &clockApp, &emojiApp, &weatherApp, &stocksApp, &flightApp, &setupApp, &friendsApp };
 const int APP_COUNT = sizeof(apps) / sizeof(apps[0]);
 
 // Launcher is a radial ring of circular chips. Geometry is computed in one
@@ -96,6 +97,12 @@ void drawAppIcon(const char* name, int cx, int cy, uint16_t chip) {
     puck::display().fillSmoothCircle(cx + 8, cy - 6, 5, ink);
     puck::display().fillSmoothRoundRect(cx - 15, cy + 1, 14, 12, 5, ink);    // shoulders (left)
     puck::display().fillSmoothRoundRect(cx + 1, cy + 1, 14, 12, 5, ink);     // shoulders (right)
+  } else if (!strcmp(name, "Stocks")) {
+    int bx[4] = { cx - 14, cx - 7, cx, cx + 7 };                            // ascending bar chart
+    int bh[4] = { 9, 15, 21, 27 };
+    int by = cy + 13;
+    for (int k = 0; k < 4; k++)
+      puck::display().fillSmoothRoundRect(bx[k], by - bh[k], 5, bh[k], 1, ink);
   } else {
     char c[2] = { name[0], 0 };                                      // fallback: first letter
     puck::display().setTextDatum(middle_center);
@@ -111,7 +118,7 @@ bool     gButtonMode    = false;   // a physical button was used -> show focus h
 int      gLauncherFocus = 0;       // focused launcher chip while in button mode
 
 void drawLauncher() {
-  static const uint16_t palette[] = { CYAN, ORANGE, GREEN, MAGENTA, YELLOW, RED };
+  static const uint16_t palette[] = { CYAN, ORANGE, GREEN, MAGENTA, YELLOW, RED, BLUE };
   const int pn = sizeof(palette) / sizeof(palette[0]);
 
   puck::display().fillScreen(BLACK);
@@ -137,11 +144,17 @@ void drawLauncher() {
 }
 
 static bool gSetupShown = false;   // "finish setup" screen drawn once per entry (avoids per-frame flicker)
+
+// An app may need on-device setup before it can run: Wi-Fi (needsNet, no creds saved) or other config
+// like an API key (needsSetup). Either way, show the setup prompt and route a tap straight to Settings.
+static bool needsOnDeviceSetup(App* a) {
+  return (a->needsNet() && !Settings::haveWifi()) || a->needsSetup();
+}
 void enterApp(int i) {
   active = apps[i];
   gSetupShown = false;
   gTap.pressed = false;   // don't let the launcher chip-tap leak into the new app's onEnter() (e.g. Weather opened a grid cell)
-  if (active->needsNet() && !Settings::haveWifi()) return;   // dispatch shows the setup prompt, not an empty app
+  if (needsOnDeviceSetup(active)) return;   // dispatch shows the setup prompt, not an empty app
   active->onEnter();
 }
 void backToLauncher() { if (active) active->onExit(); active = nullptr; drawLauncher(); }
@@ -165,10 +178,13 @@ void drawSetupNeeded() {
   puck::display().setFont(&fonts::FreeSansBold12pt7b);
   puck::display().setTextColor(WHITE, BLACK);
   puck::display().drawString("Finish setup", cx, 40);
+  bool wifiCase = !active || (active->needsNet() && !Settings::haveWifi());   // Wi-Fi missing takes priority
+  const char* l1 = wifiCase ? "Connect Wi-Fi"   : (active->setupHint() ? active->setupHint() : "Open Settings");
+  const char* l2 = wifiCase ? "to use this app" : "in Settings";
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
   puck::display().setTextColor(0xC618, BLACK);
-  puck::display().drawString("Connect Wi-Fi", cx, 84);
-  puck::display().drawString("to use this app", cx, 108);
+  puck::display().drawString(l1, cx, 84);
+  puck::display().drawString(l2, cx, 108);
   int bw = 184, bh = 46, bx = cx - bw / 2, by = 148;
   puck::display().fillRoundRect(bx, by, bw, bh, 9, CYAN);
   puck::display().setTextDatum(middle_center);
@@ -178,7 +194,7 @@ void drawSetupNeeded() {
   puck::display().setTextDatum(top_center);
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
   puck::display().setTextColor(DARKGREY, BLACK);
-  puck::display().drawString("tap anywhere to set up Wi-Fi", cx, by + bh + 16);
+  puck::display().drawString(wifiCase ? "tap anywhere to set up Wi-Fi" : "tap anywhere to open Settings", cx, by + bh + 16);
 }
 
 static const int PING_BTN_Y = 198, PING_BTN_H = 32;   // Reply / Mute button row
@@ -433,6 +449,7 @@ void setup() {
   Fleet::begin();             // set the MQTT will (fleet presence) before the first connect
   Weather::begin();           // start the background weather updater
   Flight::begin();            // start the background flight tracker
+  Stocks::begin();            // start the background stock-quote updater
   Ota::begin();               // start the OTA updater (subscribes the push topic; idles until online)
 
   if (!Settings::haveWifi()) {   // first boot: go straight to on-device Wi-Fi setup
@@ -556,7 +573,7 @@ void loop() {
       if (!active->onBack()) backToLauncher();          // let the app step back a level first (e.g. radar->list)
     } else if (bB) {                                    // physical back button (>=2-button boards)
       if (!active->onBack()) backToLauncher();
-    } else if (active->needsNet() && !Settings::haveWifi()) {  // unconfigured -> prompt, not empty data
+    } else if (needsOnDeviceSetup(active)) {  // unconfigured -> prompt, not empty data
       if (!gSetupShown) { drawSetupNeeded(); drawBackChip(); gSetupShown = true; }
       Notify::draw();
       if (gTap.pressed) { gTap.pressed = false; active = &setupApp; gSetupShown = false; active->onEnter(); }

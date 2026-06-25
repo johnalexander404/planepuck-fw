@@ -23,12 +23,16 @@ namespace Settings {
   void saveEmojiTarget(const String& codeOrAll);
   String mqttPass();                  // per-device MQTT password (NVS; falls back to config MQTT_PASS)
   void saveMqttPass(const String& pass);
+  String finnhubKey();                // per-device Finnhub API key for Stocks (NVS; falls back to config FINNHUB_API_KEY)
+  void saveFinnhubKey(const String& key);
   String worldClockBlob();            // world-clock cities as JSON ("" if none)
   void saveWorldClockBlob(const String& json);
   String weatherCitiesBlob();         // weather cities as JSON ("" = use home location)
   void saveWeatherCitiesBlob(const String& json);
   String searchHistory();             // recent flight/airport searches, comma-separated ("" if none)
   void saveSearchHistory(const String& csv);
+  String stocksBlob();                // stock watchlist, comma-separated tickers ("" if none)
+  void saveStocksBlob(const String& csv);
   bool tempF();                       // true = Fahrenheit/mph, false = Celsius/km-h (default = WEATHER_UNITS_F)
   void saveTempF(bool f);
   bool clock12h();                    // true = 12-hour clock (AM/PM), false = 24-hour (default)
@@ -185,6 +189,32 @@ namespace Weather {
   void refreshNow();                       // request an immediate refresh
   const char* describe(int wmoCode);       // short condition text
   void suspend();                          // pause the background task (during an OTA flash)
+  void resume();
+}
+
+// Stock watchlist (Finnhub, free). A core-0 task round-robin-polls each ticker's quote so the list
+// price updates without touching the UI thread; the app reads the cache. Needs FINNHUB_API_KEY.
+namespace Stocks {
+  struct Quote {
+    String sym;
+    float  price = 0, change = 0, dp = 0, high = 0, low = 0, open = 0, prevClose = 0;
+    bool   valid = false;          // a quote has been fetched at least once
+    String earnings;               // next earnings date "YYYY-MM-DD" (lazy; "" until fetched/none)
+  };
+  struct Match { String sym, desc; };
+
+  void begin();
+  bool configured();                       // FINNHUB_API_KEY is set
+  int  count();                            // watchlist size
+  bool get(int i, Quote& out);             // watchlist[i] quote (cache)
+  bool add(const String& sym);             // add ticker (upper-cased) + persist; false if full/dup
+  bool remove(const String& sym);          // remove + persist
+  void setFocus(const String& sym);        // detail open: prioritize polling + fetch its earnings
+  void requestSearch(const String& q);     // async symbol search
+  bool searchPending();                    // a search is in flight
+  int  searchResults(Match* out, int max); // copy matches (newest search)
+  uint32_t version();                      // bumps on any quote/search change (lazy redraw)
+  void suspend();                          // pause during an OTA flash
   void resume();
 }
 

@@ -56,12 +56,16 @@ namespace Settings {
   void saveEmojiTarget(const String& t) { prefs.putString("emotgt", t); }
   String mqttPass() { String p = prefs.getString("mqttpass", ""); return p.length() ? p : String(MQTT_PASS); }
   void saveMqttPass(const String& p) { prefs.putString("mqttpass", p); }
+  String finnhubKey() { String k = prefs.getString("fhkey", ""); return k.length() ? k : String(FINNHUB_API_KEY); }
+  void saveFinnhubKey(const String& k) { prefs.putString("fhkey", k); }
   String worldClockBlob() { return prefs.getString("wclock", ""); }
   void saveWorldClockBlob(const String& j) { prefs.putString("wclock", j); }
   String weatherCitiesBlob() { return prefs.getString("wxcity", ""); }
   void saveWeatherCitiesBlob(const String& j) { prefs.putString("wxcity", j); }
   String searchHistory() { return prefs.getString("flthist", ""); }
   void saveSearchHistory(const String& s) { prefs.putString("flthist", s); }
+  String stocksBlob() { return prefs.getString("stocks", ""); }            // watchlist: comma-separated tickers
+  void saveStocksBlob(const String& s) { prefs.putString("stocks", s); }
   bool tempF() { return prefs.getBool("tempf", WEATHER_UNITS_F); }   // compile-time default, runtime override
   void saveTempF(bool f) { prefs.putBool("tempf", f); }
   bool clock12h() { return prefs.getBool("clk12", false); }
@@ -236,6 +240,10 @@ namespace Provision {
     h += Settings::zip();
     h += F("'></div>");
 
+    h += sec("<path d='M4 19h16M7 16V9M12 16V5M17 16v-4'/>", "Stocks");
+    h += F("<label>Finnhub API key (optional)</label>"
+           "<input name=fhkey placeholder='unchanged if left blank'></div>");
+
     // MQTT password: only ask when self-enroll is OFF. With ENROLL_URL/ENROLL_TOKEN set, the puck
     // provisions its own broker password automatically, so there's nothing for the user to type.
     if (!(strlen(ENROLL_URL) && strlen(ENROLL_TOKEN))) {
@@ -260,6 +268,8 @@ namespace Provision {
     Settings::saveZip(server.arg("zip"));   // saved as-is; blank clears it (back to IP location)
     String mp = server.arg("mpass");
     if (mp.length()) Settings::saveMqttPass(mp);   // blank = keep current (don't wipe the secret)
+    String fk = server.arg("fhkey");
+    if (fk.length()) Settings::saveFinnhubKey(fk); // blank = keep current (Stocks app key)
     Settings::saveDisplayName(server.arg("dname"));  // clock + friends name; pre-filled, so blank = cleared
     { String u = server.arg("unit"); if (u.length()) Settings::saveTempF(u == "f"); }      // temp units
     { String c = server.arg("clk");  if (c.length()) Settings::saveClock12h(c == "12"); }   // clock format
@@ -1481,6 +1491,179 @@ namespace Flight {
     return ok;
   }
   bool airportFailed() { return gAptFail; }
+}
+
+// ===================== Stocks (Finnhub) =====================
+// A core-0 task round-robin-polls each watchlist ticker's /quote (~1.2s/symbol, ~50/min — under the
+// 60/min free cap), prioritizing the symbol whose detail is open. Earnings + symbol search are
+// fetched lazily on demand. The UI reads the mtx-guarded cache via get()/searchResults().
+namespace Stocks {
+  static SemaphoreHandle_t mtx   = nullptr;
+  static TaskHandle_t      taskH = nullptr;
+  static volatile uint32_t gVersion = 0;
+  static volatile bool     gSuspend = false;
+
+  static Quote  gQ[MAX_STOCKS];          // cache + watchlist (gQ[i].sym is the ticker)
+  static int    gN  = 0;
+  static int    gRR = 0;                  // round-robin cursor
+  static String gFocus = "";             // ticker whose detail is open (poll priority)
+  static volatile bool gFocusEarn = false;
+  static String gSearchQ = "";
+  static volatile bool gSearchPending = false;
+  static Match  gMatch[8]; static int gMatchN = 0;
+  static String gKey = "";               // Finnhub API key, cached from Settings at begin() (portal restarts on save)
+
+  static void bump() { gVersion++; }
+  uint32_t version()  { return gVersion; }
+  bool configured()   { return gKey.length() > 0; }
+  void suspend()      { gSuspend = true; }
+  void resume()       { gSuspend = false; }
+
+  static void save() {
+    String csv;
+    for (int i = 0; i < gN; i++) { if (i) csv += ','; csv += gQ[i].sym; }
+    Settings::saveStocksBlob(csv);
+  }
+  static void load() {                    // called once in begin()
+    String csv = Settings::stocksBlob(); int start = 0;
+    while (start <= (int)csv.length() && gN < MAX_STOCKS) {
+      int c = csv.indexOf(',', start);
+      String t = (c < 0) ? csv.substring(start) : csv.substring(start, c);
+      t.trim(); t.toUpperCase();
+      if (t.length()) { gQ[gN] = Quote(); gQ[gN].sym = t; gN++; }
+      if (c < 0) break; start = c + 1;
+    }
+  }
+
+  int count() { xSemaphoreTake(mtx, portMAX_DELAY); int n = gN; xSemaphoreGive(mtx); return n; }
+  bool get(int i, Quote& out) {
+    xSemaphoreTake(mtx, portMAX_DELAY); bool ok = (i >= 0 && i < gN); if (ok) out = gQ[i];
+    xSemaphoreGive(mtx); return ok;
+  }
+  bool add(const String& symIn) {
+    String s = symIn; s.trim(); s.toUpperCase(); if (!s.length()) return false;
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    bool dup = false; for (int i = 0; i < gN; i++) if (gQ[i].sym == s) dup = true;
+    bool ok = (!dup && gN < MAX_STOCKS);
+    if (ok) { gQ[gN] = Quote(); gQ[gN].sym = s; gN++; save(); }
+    xSemaphoreGive(mtx);
+    if (ok) { bump(); if (taskH) xTaskNotifyGive(taskH); }
+    return ok;
+  }
+  bool remove(const String& symIn) {
+    String s = symIn; s.toUpperCase(); bool ok = false;
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    for (int i = 0; i < gN; i++) if (gQ[i].sym == s) {
+      for (int j = i; j < gN - 1; j++) gQ[j] = gQ[j + 1]; gN--; ok = true; save(); break;
+    }
+    xSemaphoreGive(mtx); if (ok) bump(); return ok;
+  }
+  void setFocus(const String& symIn) {
+    String s = symIn; s.toUpperCase();
+    xSemaphoreTake(mtx, portMAX_DELAY); bool changed = (s != gFocus); gFocus = s; xSemaphoreGive(mtx);
+    if (changed) { gFocusEarn = true; if (taskH) xTaskNotifyGive(taskH); }
+  }
+  void requestSearch(const String& q) {
+    xSemaphoreTake(mtx, portMAX_DELAY); gSearchQ = q; gMatchN = 0; xSemaphoreGive(mtx);
+    gSearchPending = true; bump(); if (taskH) xTaskNotifyGive(taskH);
+  }
+  bool searchPending() { return gSearchPending; }
+  int  searchResults(Match* out, int max) {
+    xSemaphoreTake(mtx, portMAX_DELAY); int k = 0; for (int i = 0; i < gMatchN && k < max; i++) out[k++] = gMatch[i];
+    xSemaphoreGive(mtx); return k;
+  }
+
+  static String urlenc(const String& s) {
+    String o; for (size_t i = 0; i < s.length(); i++) { char c = s[i];
+      if (isalnum((unsigned char)c) || c == '.' || c == '-' || c == '_') o += c;
+      else { char b[4]; snprintf(b, sizeof b, "%%%02X", (unsigned char)c); o += b; } }
+    return o;
+  }
+  static String fhurl(const String& path) { return String("https://finnhub.io/api/v1/") + path + "&token=" + gKey; }
+  static bool getJson(const String& url, JsonDocument& doc) {
+    if (!Net::online()) return false;
+    WiFiClientSecure tls; tls.setInsecure(); tls.setHandshakeTimeout(8);   // non-OTA data fetch (cf. Flight/OpenSky)
+    HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(10000);
+    if (!http.begin(tls, url)) return false;
+    int code = http.GET();
+    bool ok = (code == 200) && !deserializeJson(doc, http.getString());
+    http.end(); return ok;
+  }
+
+  static void fetchQuote(const String& sym) {
+    JsonDocument d;
+    if (!getJson(fhurl("quote?symbol=" + sym), d)) return;
+    float c = d["c"] | 0.0f; if (c <= 0) return;          // no data (bad/halted symbol)
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    for (int i = 0; i < gN; i++) if (gQ[i].sym == sym) {
+      gQ[i].price = c;            gQ[i].high  = d["h"]  | 0.0f; gQ[i].low = d["l"] | 0.0f;
+      gQ[i].open  = d["o"] | 0.0f; gQ[i].prevClose = d["pc"] | 0.0f;
+      gQ[i].change = d["d"] | 0.0f; gQ[i].dp = d["dp"] | 0.0f; gQ[i].valid = true; break;
+    }
+    xSemaphoreGive(mtx); bump();
+  }
+  static void fetchEarnings(const String& sym) {
+    String date = "none";
+    time_t now = time(nullptr);
+    if (now > 1700000000) {                                // need a real clock for the date window
+      struct tm tmv; char from[16], to[16];
+      localtime_r(&now, &tmv); strftime(from, sizeof from, "%Y-%m-%d", &tmv);
+      time_t later = now + 120L * 86400; localtime_r(&later, &tmv); strftime(to, sizeof to, "%Y-%m-%d", &tmv);
+      JsonDocument d;
+      if (getJson(fhurl(String("calendar/earnings?symbol=") + sym + "&from=" + from + "&to=" + to), d)) {
+        String best = "";
+        for (JsonVariant e : d["earningsCalendar"].as<JsonArray>()) {
+          const char* dt = e["date"] | ""; if (dt[0] && (best == "" || String(dt) < best)) best = dt;   // soonest upcoming
+        }
+        if (best.length()) date = best;
+      }
+    }
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    for (int i = 0; i < gN; i++) if (gQ[i].sym == sym) { gQ[i].earnings = date; break; }
+    xSemaphoreGive(mtx); bump();
+  }
+  static void doSearch() {
+    xSemaphoreTake(mtx, portMAX_DELAY); String q = gSearchQ; xSemaphoreGive(mtx);
+    Match tmp[8]; int tn = 0;
+    JsonDocument d;
+    if (q.length() && getJson(fhurl("search?q=" + urlenc(q)), d)) {
+      for (JsonVariant r : d["result"].as<JsonArray>()) {
+        const char* s = r["symbol"] | ""; if (!s[0] || tn >= 8) continue;
+        if (strchr(s, '.') || strchr(s, ':')) continue;   // skip exotic/foreign-listing tickers
+        tmp[tn].sym = s; tmp[tn].desc = String((const char*)(r["description"] | "")); tn++;
+      }
+    }
+    xSemaphoreTake(mtx, portMAX_DELAY); gMatchN = tn; for (int i = 0; i < tn; i++) gMatch[i] = tmp[i]; xSemaphoreGive(mtx);
+    gSearchPending = false; bump();
+  }
+
+  static void task(void*) {
+    bool focusTurn = false;
+    for (;;) {
+      if (gSuspend || !configured() || !Net::online()) { vTaskDelay(pdMS_TO_TICKS(1500)); continue; }
+      if (gSearchPending) { doSearch(); vTaskDelay(pdMS_TO_TICKS(900)); continue; }
+      xSemaphoreTake(mtx, portMAX_DELAY); String fc = gFocus; xSemaphoreGive(mtx);
+      if (gFocusEarn && fc.length()) { gFocusEarn = false; fetchEarnings(fc); vTaskDelay(pdMS_TO_TICKS(900)); continue; }
+      String sym = "";
+      xSemaphoreTake(mtx, portMAX_DELAY);
+      if (gN > 0) {
+        if (focusTurn && fc.length()) { for (int i = 0; i < gN; i++) if (gQ[i].sym == fc) { sym = fc; break; } }
+        if (!sym.length()) { if (gRR >= gN) gRR = 0; sym = gQ[gRR].sym; gRR = (gRR + 1) % gN; }
+        focusTurn = !focusTurn;
+      }
+      xSemaphoreGive(mtx);
+      if (sym.length()) fetchQuote(sym);
+      vTaskDelay(pdMS_TO_TICKS(1200));                    // ~50/min, under the 60/min free cap
+    }
+  }
+
+  void begin() {
+    if (taskH) return;
+    mtx = xSemaphoreCreateMutex();
+    gKey = Settings::finnhubKey();                        // per-device key (captive portal), else config.h default
+    load();                                               // restore the watchlist (so the UI has it immediately)
+    xTaskCreatePinnedToCore(task, "stocks", 12288, nullptr, 1, &taskH, 0);
+  }
 }
 
 // ===================== Broker (MQTT) =====================

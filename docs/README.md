@@ -11,8 +11,9 @@ Detail pages behind the [main README](../README.md).
 - [Hardware & boards](hardware.md) — CoreS3, the Waveshare scaffold, first flash
 
 ## Apps
-[Clock](apps/clock.md) · [Weather](apps/weather.md) · [Flight](apps/flight.md) ·
-[Emoji](apps/emoji.md) · [Friends](apps/friends.md) · [Settings](apps/settings.md)
+[Clock](apps/clock.md) · [Weather](apps/weather.md) · [Stocks](apps/stocks.md) ·
+[Flight](apps/flight.md) · [Emoji](apps/emoji.md) · [Friends](apps/friends.md) ·
+[Settings](apps/settings.md)
 
 ## Operator runbook
 [`tools/OTA-SETUP.md`](../tools/OTA-SETUP.md) — the full one-time server + CI setup (DNS, TLS, ACLs,

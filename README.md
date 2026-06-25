@@ -45,11 +45,18 @@ Tiers 3–4 need a small server (a VPS running **Mosquitto + Caddy**) — see
 [docs/backend.md](docs/backend.md) and the copy-pasteable runbook in
 [`tools/OTA-SETUP.md`](tools/OTA-SETUP.md).
 
+The **Stocks** app is independent of the tiers above: with Wi-Fi it needs a free Finnhub key
+([finnhub.io](https://finnhub.io)), entered **per-device in the captive portal** (Settings →
+Stocks) — each gadget calls Finnhub directly with its own key, so nothing is shared or proxied.
+(A `FINNHUB_API_KEY` in `config.h` works as a fallback default.) No key = the app shows a "set
+the key" prompt and everything else works.
+
 ## Apps
 | App | What it does | |
 |---|---|---|
 | **Clock** | big drifting clock + world clocks; the idle/screensaver face | [details](docs/apps/clock.md) |
 | **Weather** | live conditions, multi-city grid, 7-day forecast (Open-Meteo) | [details](docs/apps/weather.md) |
+| **Stocks** | searchable watchlist with ~5 s price ticks + earnings/day-range detail (Finnhub) | [details](docs/apps/stocks.md) |
 | **Flight** | nearby aircraft list + radar, routes, global flight/airport search | [details](docs/apps/flight.md) |
 | **Emoji** | one-tap emote to a friend or all (friends-based) | [details](docs/apps/emoji.md) |
 | **Friends** | add friends by code with mutual approval + nicknames | [details](docs/apps/friends.md) |
