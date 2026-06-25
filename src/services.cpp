@@ -1,4 +1,4 @@
-#include <M5Unified.h>
+#include "hal/puck.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
@@ -352,16 +352,13 @@ namespace ClockService {
   static bool isSynced = false;
 
   static void seedFromRtc() {
-    auto dt = M5.Rtc.getDateTime();
-    int year = dt.date.year;
-    if (year < 2020 || year > 2099) year = 2025;  // fresh/garbage -> default
     struct tm tmv = {};
-    tmv.tm_year = year - 1900;
-    tmv.tm_mon  = (dt.date.month >= 1 && dt.date.month <= 12) ? dt.date.month - 1 : 0;
-    tmv.tm_mday = (dt.date.date >= 1 && dt.date.date <= 31) ? dt.date.date : 1;
-    tmv.tm_hour = dt.time.hours % 24;
-    tmv.tm_min  = dt.time.minutes % 60;
-    tmv.tm_sec  = dt.time.seconds % 60;
+    if (!puck::RTC::getDateTime(tmv)) return;                    // no RTC -> wait for NTP
+    int year = tmv.tm_year + 1900;
+    if (year < 2020 || year > 2099) tmv.tm_year = 2025 - 1900;  // fresh/garbage -> default
+    if (tmv.tm_mon  < 0 || tmv.tm_mon  > 11) tmv.tm_mon  = 0;
+    if (tmv.tm_mday < 1 || tmv.tm_mday > 31) tmv.tm_mday = 1;
+    tmv.tm_hour %= 24; tmv.tm_min %= 60; tmv.tm_sec %= 60;
     time_t t = mktime(&tmv);
     struct timeval tv;
     tv.tv_sec = t;
@@ -447,29 +444,20 @@ namespace Dim {
 
   // CoreS3's LTR-553 ambient light sensor, on the internal I2C bus. Compiled in always; whether it's
   // actually USED is decided at runtime by the boot probe below (so one binary covers CoreS3 + SE).
-  static constexpr uint8_t LTR553_ADDR      = 0x23;
-  static constexpr uint8_t LTR553_ALS_CONTR = 0x80;   // bit0: 1 = ALS active
-  static constexpr uint8_t LTR553_MANUFAC   = 0x87;   // MANUFAC_ID == 0x05 when present
-  static constexpr uint8_t LTR553_CH0_LOW   = 0x8A;   // visible+IR, 16-bit little-endian
+  // The ambient light sensor (CoreS3 LTR-553) is detected + read via puck::Light, so one binary
+  // covers boards with and without it.
   static uint16_t lastLux  = BRIGHT_DAY;              // raw CH0 reading (lux proxy)
   static uint32_t lastRead = 0;
 
-  static void sensorBegin() {
-    M5.In_I2C.writeRegister8(LTR553_ADDR, LTR553_ALS_CONTR, 0x01, 400000);  // wake into active mode
-  }
   static uint16_t readLux() {
-    uint8_t buf[2] = {0, 0};
-    if (!M5.In_I2C.readRegister(LTR553_ADDR, LTR553_CH0_LOW, buf, 2, 400000)) return lastLux;
-    return (uint16_t)(buf[0] | (buf[1] << 8));
+    uint16_t v = puck::Light::rawLux();
+    return v ? v : lastLux;                           // keep last good on a 0/failed read
   }
 
   void begin() {
-    cur = BRIGHT_DAY; M5.Display.setBrightness(cur); lastWake = millis();
+    cur = BRIGHT_DAY; puck::display().setBrightness(cur); lastWake = millis();
 #if !FORCE_NO_LIGHT_SENSOR
-    uint8_t id = 0;                     // auto-detect: present iff MANUFAC_ID reads 0x05
-    if (M5.In_I2C.readRegister(LTR553_ADDR, LTR553_MANUFAC, &id, 1, 400000) && id == 0x05) {
-      gSensor = true; sensorBegin();
-    }
+    gSensor = puck::Light::available();               // LTR-553 auto-detected by the HAL
 #endif
   }
   void wake()   { lastWake = millis(); }
@@ -503,7 +491,7 @@ namespace Dim {
     gDimmed = gAllowIdleDim && (idle >= (uint32_t)IDLE_DIM_SEC * 1000UL);   // only the Clock deep-dims -> tap-to-wake there
     if (cur < target) cur++;
     else if (cur > target) cur--;
-    M5.Display.setBrightness((uint8_t)cur);
+    puck::display().setBrightness((uint8_t)cur);
   }
 }
 
@@ -517,24 +505,20 @@ namespace Compass {
   static const uint32_t CAL_MS = 15000;
 
   void begin() {
-    if (!M5.Imu.isEnabled()) return;
-    // _imu_instance[1] holds the magnetometer; it stays null on boards without one.
-    gHasMag = (M5.Imu.getImuInstancePtr(1) != nullptr);
+    gHasMag = puck::IMU::available();             // probed + offsets restored by puck::IMU::begin()
     if (!gHasMag) return;
-    M5.Imu.loadOffsetFromNVS();                  // restore saved hard-iron offsets, if any
     gCalibrated = Settings::magCalibrated();
   }
 
   void startCal() {
     if (!gHasMag) return;
-    M5.Imu.setCalibration(0, 0, 128);            // mag-only auto-cal: track min/max while moving
+    puck::IMU::calibrationStart();                // mag-only auto-cal: track min/max while moving
     gCalActive = true;
     gCalEnd = millis() + CAL_MS;
   }
 
   static void finishCal() {
-    M5.Imu.setCalibration(0, 0, 0);              // freeze offsets
-    M5.Imu.saveOffsetToNVS();
+    puck::IMU::calibrationSave();                 // freeze + persist offsets
     Settings::setMagCalibrated(true);
     gCalibrated = true;
     gCalActive  = false;
@@ -548,12 +532,12 @@ namespace Compass {
 
   void loop() {
     if (!gHasMag) return;
-    M5.Imu.update();                             // the calibration runs inside update() when active
+    puck::IMU::update();                         // calibration runs inside update() when active
     if (gCalActive && (int32_t)(millis() - gCalEnd) >= 0) finishCal();
 
     float ax, ay, az, mx, my, mz;
-    if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
-    if (!M5.Imu.getMag(&mx, &my, &mz))   return;
+    if (!puck::IMU::getAccel(ax, ay, az)) return;
+    if (!puck::IMU::getMag(mx, my, mz))   return;
 
     // Tilt-compensated heading of the device's +Y axis (top edge), done with vectors so
     // it doesn't depend on the accel sign convention: up = accel direction; project the
@@ -596,7 +580,7 @@ namespace Notify {
   static uint32_t dotUntil = 0;
   static uint32_t muteUntil = 0;
 
-  void begin() { M5.Speaker.begin(); M5.Speaker.setVolume(200); }
+  void begin() { puck::Audio::setVolume(200); }   // speaker is brought up by puck::begin()
   void loop()  {}
 
   void mute(uint32_t ms) { muteUntil = millis() + ms; }
@@ -606,20 +590,20 @@ namespace Notify {
   void gentle(const String& title) {                  // ambient: silent at night or while muted
     (void)title;
     dotUntil = millis() + 2500;
-    if (!Dim::isNight() && !muted()) M5.Speaker.tone(880, 120);   // soft chirp
+    if (puck::Audio::available() && !Dim::isNight() && !muted()) puck::Audio::tone(880, 120);   // soft chirp
   }
 
   void alert(const String& title) {                   // friend ping: audible unless muted
     (void)title;
     dotUntil = millis() + 4000;
-    if (!muted()) M5.Speaker.tone(1568, 220);          // bright tone, heard from any screen
+    if (puck::Audio::available() && !muted()) puck::Audio::tone(1568, 220);   // bright tone, heard from any screen
   }
 
   void draw() {
     if (millis() > dotUntil) return;
-    int x = M5.Display.width() - 18, y = 18;
-    M5.Display.fillCircle(x, y, 8, ORANGE);
-    M5.Display.fillCircle(x, y, 5, RED);
+    int x = puck::display().width() - 18, y = 18;
+    puck::display().fillCircle(x, y, 8, ORANGE);
+    puck::display().fillCircle(x, y, 5, RED);
   }
 }
 
@@ -1937,12 +1921,13 @@ namespace Ota {
   }
 
   // Fetch + parse the manifest; fills outputs and returns true on a valid read.
-  static bool fetchManifest(int& outVer, String& outUrl, String& outNotes) {
+  static bool fetchManifest(int& outVer, String& outUrl, String& outNotes, int& outCode) {
+    outCode = 0;                                                      // <=0 => never reached the server; 200 => got the manifest
     if (!Net::online() || !ClockService::synced()) return false;     // TLS needs a real clock
     WiFiClientSecure tls; tls.setCACert(MQTT_CA_CERT); tls.setHandshakeTimeout(15);
     HTTPClient http; http.setConnectTimeout(10000); http.setTimeout(12000);
     if (!http.begin(tls, OTA_MANIFEST_URL)) return false;
-    int code = http.GET(); bool ok = false;
+    int code = http.GET(); outCode = code; bool ok = false;
     if (code == 200) {
       JsonDocument doc;
       if (!deserializeJson(doc, http.getString())) {
@@ -2035,17 +2020,18 @@ namespace Ota {
           if (!Net::online())               { setError("no Wi-Fi");      setPhase(IDLE); }
           else if (!ClockService::synced()) { setError("clock not set"); setPhase(IDLE); }
           else {
-            int v = 0; String u, n; bool got = false;
+            int v = 0, code = 0; String u, n; bool got = false;
             for (int a = 0; a < 3 && !got; a++) {           // TLS can fail transiently under heap pressure -> retry
               if (a) vTaskDelay(pdMS_TO_TICKS(1500));
-              got = fetchManifest(v, u, n);
+              got = fetchManifest(v, u, n, code);
             }
             if (got) {
               if (v > FW_VERSION && (manual || !snoozed())) {
                 xSemaphoreTake(mtx, portMAX_DELAY); gBinUrl = u; gNotes = n; xSemaphoreGive(mtx);
                 gAvailVer = v; setError(""); setPhase(AVAILABLE);     // -> confirm overlay pops in main.cpp
               } else { setError(""); setPhase(IDLE); }                // up to date, or postponed by "Later"
-            } else { setError("server unreachable"); setPhase(IDLE); }
+            } else if (code == 200) { setError(""); setPhase(IDLE); } // reached the server, manifest just has nothing newer -> "up to date"
+            else { setError("server unreachable"); setPhase(IDLE); } // no HTTP 200 (connect/TLS failed) -> genuinely unreachable
           }
         }
       }

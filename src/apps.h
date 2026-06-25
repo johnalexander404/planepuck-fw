@@ -1,18 +1,18 @@
 #pragma once
-#include <M5Unified.h>
+#include "hal/puck.h"
 #include "App.h"
 #include "services.h"
 #include "config.h"
 
 // ---------------- Clock ----------------
 // Big local time that slowly drifts (anti-burn-in) + up to MAX_WORLD_CITIES world-clock rows.
-// The time + status are composed off-screen in an M5Canvas band and pushed in a single blit, so a
+// The time + status are composed off-screen in an puck::Canvas band and pushed in a single blit, so a
 // time tick (or a drift step) never shows a clear-then-redraw flash. The city rows (change once a
 // minute, fixed position) are drawn directly below the band.
 class ClockApp : public App {
   int      lastSec = -1, lastMin = -1;
   uint32_t lastPhase = 0xFFFFFFFF;
-  M5Canvas band;                               // off-screen time+status band (PSRAM); blitted each tick
+  puck::Canvas band;                               // off-screen time+status band (PSRAM); blitted each tick
   bool     haveBand = false;
   bool     h12 = false;                        // 12-hour (AM/PM) vs 24-hour, from Settings (cached on enter)
   static const int BAND_TOP = 44, BAND_H = 112;   // screen rows 44..156; cities live at >=156
@@ -20,9 +20,9 @@ class ClockApp : public App {
   void drawCities() {                          // up to 4 rows, fixed left column (don't drift -> no clip)
     WorldClock::City cs[MAX_WORLD_CITIES];
     int n = WorldClock::get(cs, MAX_WORLD_CITIES);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(2);
-    M5.Display.setTextDatum(top_left);
-    M5.Display.setTextColor(CYAN, BLACK);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
+    puck::display().setTextDatum(top_left);
+    puck::display().setTextColor(CYAN, BLACK);
     for (int i = 0; i < n; i++) {
       int hh, mm; char row[24];
       if (WorldClock::timeFor(cs[i], hh, mm)) {
@@ -31,22 +31,22 @@ class ClockApp : public App {
         else       snprintf(row, sizeof(row), "%-3s %2d:%02d", cs[i].label.c_str(), hh, mm);
       } else
         snprintf(row, sizeof(row), "%-3s --:--", cs[i].label.c_str());
-      M5.Display.drawString(row, 40, 156 + i * 20);
+      puck::display().drawString(row, 40, 156 + i * 20);
     }
   }
   void drawName() {                            // user's custom label at the top (fixed, dim) — "" hides it
     String nm = Settings::displayName();
     if (!nm.length()) return;
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(2);
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setTextColor(M5.Display.color565(120, 140, 160), BLACK);
-    M5.Display.drawString(nm, M5.Display.width() / 2, 14);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
+    puck::display().setTextDatum(top_center);
+    puck::display().setTextColor(puck::display().color565(120, 140, 160), BLACK);
+    puck::display().drawString(nm, puck::display().width() / 2, 14);
   }
 public:
-  ClockApp() : App("Clock"), band(&M5.Display) {}
+  ClockApp() : App("Clock"), band(&puck::display()) {}
   bool dimsWhenIdle() const override { return true; }   // the Clock is the idle/screensaver face -> it auto-dims
   void onEnter() override {
-    M5.Display.fillScreen(BLACK);
+    puck::display().fillScreen(BLACK);
     h12 = Settings::clock12h();                 // cache the format (changes only across a reboot)
     drawName();                                 // sits above the time band (y<44); persists across ticks
     lastSec = -1; lastMin = -1; lastPhase = 0xFFFFFFFF;
@@ -54,7 +54,7 @@ public:
     if (!haveBand) {                            // allocate the band sprite once (PSRAM = ample on CoreS3)
       band.setColorDepth(16);
       band.setPsram(true);
-      haveBand = (band.createSprite(M5.Display.width(), BAND_H) != nullptr);
+      haveBand = (band.createSprite(puck::display().width(), BAND_H) != nullptr);
     }
   }
   void loop() override {
@@ -65,7 +65,7 @@ public:
     bool minOrFull = moved || (m != lastMin) || lastSec < 0;
     lastSec = s; lastPhase = phase;
 
-    int w = M5.Display.width(), cx = w / 2;
+    int w = puck::display().width(), cx = w / 2;
     int dx = (int)((phase * 7)  % (2 * CLOCK_DRIFT_MAX_PX + 1)) - CLOCK_DRIFT_MAX_PX;
     int dy = (int)((phase * 13) % (2 * CLOCK_DRIFT_MAX_PX + 1)) - CLOCK_DRIFT_MAX_PX;
     char buf[16]; const char* ap = nullptr;
@@ -84,14 +84,14 @@ public:
                 band.setTextDatum(middle_left); band.drawString(ap, cx + dx + tw / 2 + 6, ty); }
       band.pushSprite(0, BAND_TOP);                    // single blit -> zero flicker, incl. on drift
     } else {                                           // fallback if the sprite couldn't allocate
-      if (moved) M5.Display.fillRect(0, BAND_TOP, w, BAND_H, BLACK);
-      M5.Display.setTextDatum(middle_center);
-      M5.Display.setFont(&fonts::Font7); M5.Display.setTextSize(1);
-      M5.Display.setTextColor(WHITE, BLACK);
-      M5.Display.drawString(buf, cx + dx, 88 + dy);
-      if (ap) { int tw = M5.Display.textWidth(buf);
-                M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(2); M5.Display.setTextColor(CYAN, BLACK);
-                M5.Display.setTextDatum(middle_left); M5.Display.drawString(ap, cx + dx + tw / 2 + 6, 88 + dy); }
+      if (moved) puck::display().fillRect(0, BAND_TOP, w, BAND_H, BLACK);
+      puck::display().setTextDatum(middle_center);
+      puck::display().setFont(&fonts::Font7); puck::display().setTextSize(1);
+      puck::display().setTextColor(WHITE, BLACK);
+      puck::display().drawString(buf, cx + dx, 88 + dy);
+      if (ap) { int tw = puck::display().textWidth(buf);
+                puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2); puck::display().setTextColor(CYAN, BLACK);
+                puck::display().setTextDatum(middle_left); puck::display().drawString(ap, cx + dx + tw / 2 + 6, 88 + dy); }
     }
 
     if (minOrFull) { drawCities(); lastMin = m; }       // cities: fixed, opaque, redraw at most per minute
@@ -106,20 +106,20 @@ class WeatherApp : public App {
   uint32_t shownVer = 0xFFFFFFFF;
   bool     shownUpdating = false;
   bool     shownHas = false;
-  M5Canvas scope{&M5.Display};       // off-screen buffer (PSRAM) -> flicker-free on the ~60s refresh
+  puck::Canvas scope{&puck::display()};       // off-screen buffer (PSRAM) -> flicker-free on the ~60s refresh
   bool     haveScope = false;
-  lgfx::LovyanGFX* g = &M5.Display;  // draw target: the sprite during a full repaint, else the panel
+  lgfx::LovyanGFX* g = &puck::display();  // draw target: the sprite during a full repaint, else the panel
   bool     showDetail = false;       // a city's 7-day forecast page is open (tap a city to enter; back chip to leave)
   int      detailIdx = 0;            // which reading the detail page shows
 
   void center(const char* line1, uint16_t c1, const char* line2, uint16_t c2) {
-    int cx = M5.Display.width() / 2, cy = M5.Display.height() / 2;
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setFont(&fonts::Font0);
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(c1, BLACK); M5.Display.drawString(line1, cx, cy - 20);
-    M5.Display.setTextColor(c2, BLACK); M5.Display.drawString(line2, cx, cy + 16);
+    int cx = puck::display().width() / 2, cy = puck::display().height() / 2;
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setFont(&fonts::Font0);
+    puck::display().setTextSize(2);
+    puck::display().setTextColor(c1, BLACK); puck::display().drawString(line1, cx, cy - 20);
+    puck::display().setTextColor(c2, BLACK); puck::display().drawString(line2, cx, cy + 16);
   }
 
   // Bottom status line — shows the wall-clock time the reading was fetched
@@ -148,7 +148,7 @@ class WeatherApp : public App {
   }
 
   void drawAll(const Weather::Reading& r, bool updating) {
-    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;   // compose off-screen
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();   // compose off-screen
     int cx = g->width() / 2, cy = g->height() / 2;
     g->fillScreen(BLACK);
 
@@ -202,12 +202,12 @@ class WeatherApp : public App {
 
     drawStatus(true, updating, r.atHour, r.atMin);   // uses g (= the sprite here)
     if (haveScope) scope.pushSprite(0, 0);
-    g = &M5.Display;
+    g = &puck::display();
   }
 
   // Multi-city view: up to 4 cities in a 2x2 grid of quarters (city, temp, H/L, condition).
   void drawGrid(int n) {
-    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;   // compose off-screen
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();   // compose off-screen
     int w = g->width(), H = g->height();
     int cw = w / 2, ch = H / 2;
     g->fillScreen(BLACK);
@@ -254,12 +254,12 @@ class WeatherApp : public App {
       g->drawString(Weather::describe(r.code), cx, y0 + 96);
     }
     if (haveScope) scope.pushSprite(0, 0);
-    g = &M5.Display;
+    g = &puck::display();
   }
 
   // A city's detail page: current conditions + a 7-day forecast (composed off-screen).
   void drawCityDetail(int idx) {
-    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
     int w = g->width();
     g->fillScreen(BLACK);
     Weather::Reading r;
@@ -274,7 +274,7 @@ class WeatherApp : public App {
       g->setTextDatum(middle_center); g->setTextColor(DARKGREY, BLACK);
       g->drawString("no data yet", w / 2, 110);
       if (haveScope) scope.pushSprite(0, 0);
-      g = &M5.Display;
+      g = &puck::display();
       return;
     }
 
@@ -304,7 +304,7 @@ class WeatherApp : public App {
     }
 
     if (haveScope) scope.pushSprite(0, 0);
-    g = &M5.Display;
+    g = &puck::display();
   }
 
 public:
@@ -319,9 +319,9 @@ public:
     shownVer = 0xFFFFFFFF; shownUpdating = false; shownHas = false; showDetail = false;
     if (!haveScope) {                            // allocate the off-screen buffer once
       scope.setColorDepth(16); scope.setPsram(true);
-      haveScope = (scope.createSprite(M5.Display.width(), M5.Display.height()) != nullptr);
+      haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr);
     }
-    M5.Display.fillScreen(BLACK);
+    puck::display().fillScreen(BLACK);
     Weather::refreshNow();    // ask for a fresh pull on open...
     loop();                   // ...but paint whatever we already have right now
   }
@@ -337,7 +337,7 @@ public:
       if (!showDetail) {
         int idx = 0;
         if (n > 1) {
-          int cw = M5.Display.width() / 2, ch = M5.Display.height() / 2;
+          int cw = puck::display().width() / 2, ch = puck::display().height() / 2;
           idx = (gTap.y < ch ? 0 : 2) + (gTap.x < cw ? 0 : 1);
         }
         if (idx >= 0 && idx < n) { showDetail = true; detailIdx = idx; shownVer = 0xFFFFFFFF; }
@@ -366,7 +366,7 @@ public:
       if (has) {
         drawAll(r, upd);
       } else {
-        g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;
+        g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
         int cx = g->width() / 2, cy = g->height() / 2;
         g->fillScreen(BLACK);
         g->setTextDatum(middle_center);
@@ -375,7 +375,7 @@ public:
         g->drawString("Weather", cx, cy - 20);
         drawStatus(false, upd, -1, -1);
         if (haveScope) scope.pushSprite(0, 0);
-        g = &M5.Display;
+        g = &puck::display();
       }
       shownVer = ver; shownHas = has; shownUpdating = upd;
       return;
@@ -417,7 +417,7 @@ class FlightApp : public App {
   uint32_t shownVer = 0xFFFFFFFF;
   bool     dirty = true;
 
-  // Radar pinch-to-zoom state. The radar reads M5.Touch directly (the global one-tap
+  // Radar pinch-to-zoom state. The radar reads puck::Touch directly (the global one-tap
   // gTap abstraction can't express a two-finger gesture).
   float    radarRange = FLIGHT_RADIUS_NM;     // shown range (nm); shrinks as you zoom in
   float    pinchPrev  = 0;                     // previous two-finger distance (px), 0 = none
@@ -431,9 +431,9 @@ class FlightApp : public App {
   bool     autoFit = false;                    // on a fresh radar open: zoom to spread the planes out, once
   uint32_t lastRadarPull = 0;                  // throttle the while-on-radar fast refresh
   static const uint32_t RADAR_PULL_MS = 5000;  // refresh plane data every 5s while the radar is shown
-  M5Canvas scope{&M5.Display};                 // off-screen radar buffer (PSRAM) -> single blit, flicker-free
+  puck::Canvas scope{&puck::display()};                 // off-screen radar buffer (PSRAM) -> single blit, flicker-free
   bool     haveScope = false;
-  lgfx::LovyanGFX* g = &M5.Display;            // current draw target: the sprite during drawRadar, else the panel
+  lgfx::LovyanGFX* g = &puck::display();            // current draw target: the sprite during drawRadar, else the panel
   float    lastHdg = -999;                     // last heading we redrew at (for live rotation)
   int      lastCalSec = -1;                    // last calibration countdown we drew
   bool     lastCalState = false;               // were we calibrating last frame
@@ -488,7 +488,7 @@ class FlightApp : public App {
   }
 
   void drawList() {
-    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;   // off-screen -> no refresh flash
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();   // off-screen -> no refresh flash
     int w = g->width();
     g->fillScreen(BLACK);
     g->setTextDatum(top_center);
@@ -526,7 +526,7 @@ class FlightApp : public App {
     g->setTextColor(CYAN, BLACK);
     g->drawString("Search", w / 2 + 6 + (w / 2 - 26) / 2, SEARCH_BTN_Y + 14);
     if (haveScope) scope.pushSprite(0, 0);
-    g = &M5.Display;
+    g = &puck::display();
   }
 
   bool radarHeadingUp() {     // compass rotation active (mag present, calibrated, not mid-cal)
@@ -538,17 +538,17 @@ class FlightApp : public App {
   }
 
   void drawRadarCal() {       // figure-8 calibration screen (while Compass::calibrating())
-    int cx = M5.Display.width() / 2, cy = M5.Display.height() / 2;
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setFont(&fonts::Font0);
-    M5.Display.setTextSize(2); M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("Calibrating compass", cx, cy - 44);
-    M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString("rotate in a figure-8", cx, cy - 16);
-    M5.Display.setTextSize(5); M5.Display.setTextColor(GREEN, BLACK);
+    int cx = puck::display().width() / 2, cy = puck::display().height() / 2;
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setFont(&fonts::Font0);
+    puck::display().setTextSize(2); puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("Calibrating compass", cx, cy - 44);
+    puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString("rotate in a figure-8", cx, cy - 16);
+    puck::display().setTextSize(5); puck::display().setTextColor(GREEN, BLACK);
     char s[6]; snprintf(s, sizeof(s), "%d", Compass::calSecondsLeft());
-    M5.Display.drawString(s, cx, cy + 34);
+    puck::display().drawString(s, cx, cy + 34);
   }
 
   // Flight details for the tracked plane: a solid panel BELOW the back chip (top-left) so it stays
@@ -635,7 +635,7 @@ class FlightApp : public App {
 
   void drawRadar() {
     if (Compass::calibrating()) { drawRadarCal(); return; }   // cal screen draws direct (no sprite)
-    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;  // compose off-screen, blit once
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();  // compose off-screen, blit once
     int w = g->width(), cx = w / 2 + panX, cy = 116 + panY, maxR = 100;  // cx/cy = panned world origin
     int fcx = w / 2, fcy = 116;                        // FIXED scope center: rings + crosshair live here
     float scale = maxR / radarRange;
@@ -791,19 +791,19 @@ class FlightApp : public App {
     }
 
     if (haveScope) scope.pushSprite(0, 0);   // single blit -> flicker-free even on a data/heading refresh
-    g = &M5.Display;                          // restore the default target for the other (direct) screens
+    g = &puck::display();                          // restore the default target for the other (direct) screens
   }
 
   // Radar input: two fingers = pinch zoom, single tap = select plane / exit / reset / cal.
   // Reads the touch panel directly because a pinch needs both points, which gTap omits.
   void handleRadar() {
-    int w = M5.Display.width(), cx = w / 2, cy = 116, maxR = 100, hgt = M5.Display.height();
+    int w = puck::display().width(), cx = w / 2, cy = 116, maxR = 100, hgt = puck::display().height();
     if (Compass::calibrating()) { gTap.pressed = false; return; }   // ignore taps mid-cal
-    size_t tc = M5.Touch.getCount();
+    int tc = puck::Touch::count();
 
     if (tc >= 2) {                                   // pinch: scale range by finger spread
-      auto t0 = M5.Touch.getDetail(0);
-      auto t1 = M5.Touch.getDetail(1);
+      auto t0 = puck::Touch::get(0);
+      auto t1 = puck::Touch::get(1);
       float dx = t0.x - t1.x, dy = t0.y - t1.y;
       float d  = sqrtf(dx * dx + dy * dy);
       if (pinchPrev > 1.0f && d > 1.0f) {
@@ -820,7 +820,7 @@ class FlightApp : public App {
     pinchPrev = 0;
 
     if (tc == 1) {                                   // one finger -> drag to re-center (world moves under fixed rings)
-      auto t = M5.Touch.getDetail(0);
+      auto t = puck::Touch::get(0);
       if (!dragging) { dragging = true; dragLastX = t.x; dragLastY = t.y; }
       else if (t.x != dragLastX || t.y != dragLastY) {
         panX = constrain(panX + (t.x - dragLastX), -maxR, maxR);
@@ -830,8 +830,8 @@ class FlightApp : public App {
       }
     }
 
-    auto td = M5.Touch.getDetail(0);
-    if (td.wasClicked() && !suppressTap) {
+    auto td = puck::Touch::get(0);
+    if (td.clicked && !suppressTap) {
       int tx = td.x, ty = td.y;
       if (tx >= w - RADAR_RB_W - 4 && ty <= 4 + RADAR_RB_H) {                       // RESET pan + re-fit zoom
         panX = 0; panY = 0; autoFit = true; dirty = true;
@@ -887,7 +887,7 @@ class FlightApp : public App {
   }
 
   void drawDetail() {
-    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&M5.Display;   // off-screen -> no refresh flash
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();   // off-screen -> no refresh flash
     int w = g->width(), cx = w / 2;
     Flight::Plane tp;
     const Flight::Plane* p = nullptr;
@@ -910,7 +910,7 @@ class FlightApp : public App {
       g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
       g->drawString("tap to go back", cx, g->height() - 16);
       if (haveScope) scope.pushSprite(0, 0);
-      g = &M5.Display;
+      g = &puck::display();
       return;
     }
 
@@ -944,7 +944,7 @@ class FlightApp : public App {
     snprintf(line, sizeof(line), "%.0f nm @ %03d  -  %s", p->dist, (int)lroundf(p->bearing), climb);
     g->drawString(line, cx, g->height() - 12);
     if (haveScope) scope.pushSprite(0, 0);
-    g = &M5.Display;
+    g = &puck::display();
   }
 
   // --- search history (recent flight nos / airport codes, persisted in NVS, most-recent first) ---
@@ -1002,39 +1002,39 @@ class FlightApp : public App {
   }
 
   void drawHistory() {                              // event-driven screen -> draw direct (no off-screen needed)
-    int w = M5.Display.width();
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(1);
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("Recent searches", w / 2, 10);
+    int w = puck::display().width();
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(top_center);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("Recent searches", w / 2, 10);
     if (histN == 0) {
-      M5.Display.setTextColor(DARKGREY, BLACK);
-      M5.Display.drawString("no recent searches", w / 2, 110);
+      puck::display().setTextColor(DARKGREY, BLACK);
+      puck::display().drawString("no recent searches", w / 2, 110);
     } else {
-      M5.Display.setTextSize(2);
-      M5.Display.setTextDatum(middle_left);
+      puck::display().setTextSize(2);
+      puck::display().setTextDatum(middle_left);
       for (int i = 0; i < histN; i++) {
         int y = LIST_TOP + i * LIST_ROWH;
-        M5.Display.setTextColor(WHITE, BLACK);
-        M5.Display.drawString(hist[i], 16, y + 9);
+        puck::display().setTextColor(WHITE, BLACK);
+        puck::display().drawString(hist[i], 16, y + 9);
       }
-      M5.Display.setTextSize(1);
+      puck::display().setTextSize(1);
     }
     // bottom row: Keys (back to keyboard) | Clear
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setTextSize(2);
-    M5.Display.drawRoundRect(20, SEARCH_BTN_Y, w / 2 - 26, 28, 6, CYAN);
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("Keys", 20 + (w / 2 - 26) / 2, SEARCH_BTN_Y + 14);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setTextSize(2);
+    puck::display().drawRoundRect(20, SEARCH_BTN_Y, w / 2 - 26, 28, 6, CYAN);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("Keys", 20 + (w / 2 - 26) / 2, SEARCH_BTN_Y + 14);
     uint16_t clr = histN ? ORANGE : DARKGREY;
-    M5.Display.drawRoundRect(w / 2 + 6, SEARCH_BTN_Y, w / 2 - 26, 28, 6, clr);
-    M5.Display.setTextColor(clr, BLACK);
-    M5.Display.drawString("Clear", w / 2 + 6 + (w / 2 - 26) / 2, SEARCH_BTN_Y + 14);
+    puck::display().drawRoundRect(w / 2 + 6, SEARCH_BTN_Y, w / 2 - 26, 28, 6, clr);
+    puck::display().setTextColor(clr, BLACK);
+    puck::display().drawString("Clear", w / 2 + 6 + (w / 2 - 26) / 2, SEARCH_BTN_Y + 14);
   }
 
   void handleHistoryTap(int x, int y) {
-    int w = M5.Display.width();
+    int w = puck::display().width();
     if (y >= SEARCH_BTN_Y) {
       if (x < w / 2) { mode = SEARCH; }            // Keys -> back to the keyboard
       else if (histN) { histN = 0; saveHistoryNvs(); }   // Clear
@@ -1046,28 +1046,28 @@ class FlightApp : public App {
   }
 
   void drawSearch() {
-    int w = M5.Display.width();
-    M5.Display.fillScreen(BLACK);
+    int w = puck::display().width();
+    puck::display().fillScreen(BLACK);
     // hint: a flight number tracks a plane; an airport code (JFK / KJFK) centers the radar there
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(1);
-    M5.Display.setTextColor(DARKGREY, BLACK);
-    M5.Display.drawString("flight no. or airport code", w / 2, 4);
+    puck::display().setTextDatum(top_center);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
+    puck::display().setTextColor(DARKGREY, BLACK);
+    puck::display().drawString("flight no. or airport code", w / 2, 4);
     // typed text
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(3);
-    M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString(typed.length() ? typed : String("_"), w / 2, 28);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(3);
+    puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString(typed.length() ? typed : String("_"), w / 2, 28);
     // character keys
-    M5.Display.setTextSize(2);
+    puck::display().setTextSize(2);
     for (int r = 0; r < 4; r++) {
       const char* row = kbRows[r];
       for (int i = 0; row[i]; i++) {
         int x = i * KW, y = KB_TOP + r * KH;
-        M5.Display.drawRoundRect(x + 1, y + 1, KW - 2, KH - 2, 3, DARKGREY);
+        puck::display().drawRoundRect(x + 1, y + 1, KW - 2, KH - 2, 3, DARKGREY);
         char s[2] = { row[i], 0 };
-        M5.Display.setTextColor(CYAN, BLACK);
-        M5.Display.drawString(s, x + KW / 2, y + KH / 2);
+        puck::display().setTextColor(CYAN, BLACK);
+        puck::display().drawString(s, x + KW / 2, y + KH / 2);
       }
     }
     // bottom row: DEL | HIST | GO
@@ -1076,15 +1076,15 @@ class FlightApp : public App {
     uint16_t cols[3] = { ORANGE, CYAN, GREEN };
     for (int i = 0; i < 3; i++) {
       int x = i * (w / 3);
-      M5.Display.drawRoundRect(x + 2, by + 1, w / 3 - 4, 34, 4, cols[i]);
-      M5.Display.setTextColor(cols[i], BLACK);
-      M5.Display.drawString(labels[i], x + (w / 3) / 2, by + 18);
+      puck::display().drawRoundRect(x + 2, by + 1, w / 3 - 4, 34, 4, cols[i]);
+      puck::display().setTextColor(cols[i], BLACK);
+      puck::display().drawString(labels[i], x + (w / 3) / 2, by + 18);
     }
   }
 
   // returns: 0..n-1 char appended handled internally; here we mutate state.
   void handleSearchTap(int x, int y) {
-    int w = M5.Display.width();
+    int w = puck::display().width();
     int by = KB_TOP + 4 * KH;
     if (y >= by) {                              // bottom row
       int b = x / (w / 3);
@@ -1130,7 +1130,7 @@ public:
     lastHdg = -999; lastCalSec = -1; lastCalState = false;
     if (!haveScope) {                            // allocate the off-screen radar buffer once (PSRAM = ample)
       scope.setColorDepth(16); scope.setPsram(true);
-      haveScope = (scope.createSprite(M5.Display.width(), M5.Display.height()) != nullptr);
+      haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr);
     }
     Flight::refreshNow();
   }
@@ -1170,7 +1170,7 @@ public:
       }
       handleRadar();                               // pinch-zoom + taps (owns the touch panel)
     } else if (gTap.pressed) {
-      int w = M5.Display.width();
+      int w = puck::display().width();
       if (mode == LIST) {
         if (gTap.y >= SEARCH_BTN_Y) {
           if (gTap.x < w / 2) { mode = RADAR; radarFreshView(); }   // open RADAR fresh: centered + auto-fit
@@ -1234,83 +1234,83 @@ class SetupApp : public App {
   static bool otaBtnReady() { return Ota::configured() && Ota::phase() != Ota::CHECKING; }
 
   void draw() {
-    int w = M5.Display.width(), cx = w / 2;
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setFont(&fonts::Font0);
+    int w = puck::display().width(), cx = w / 2;
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(top_center);
+    puck::display().setFont(&fonts::Font0);
 
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString("Settings", cx, 16);
+    puck::display().setTextSize(2);
+    puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString("Settings", cx, 16);
 
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("1. Join hotspot:", cx, 50);
-    M5.Display.setTextColor(GREEN, BLACK);
-    M5.Display.drawString(Provision::apName(), cx, 72);
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("2. Browse to", cx, 102);
-    M5.Display.setTextColor(GREEN, BLACK);
-    M5.Display.drawString("192.168.4.1", cx, 124);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("1. Join hotspot:", cx, 50);
+    puck::display().setTextColor(GREEN, BLACK);
+    puck::display().drawString(Provision::apName(), cx, 72);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("2. Browse to", cx, 102);
+    puck::display().setTextColor(GREEN, BLACK);
+    puck::display().drawString("192.168.4.1", cx, 124);
 
     char fw[28]; snprintf(fw, sizeof(fw), "Firmware v%d", FW_VERSION);
-    M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString(fw, cx, 156);
-    M5.Display.setTextSize(1);
-    M5.Display.setTextColor(M5.Display.color565(120, 140, 160), BLACK);   // exact build (tells RCs apart)
-    M5.Display.drawString(String("build ") + FW_BUILD, cx, 176);
+    puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString(fw, cx, 156);
+    puck::display().setTextSize(1);
+    puck::display().setTextColor(puck::display().color565(120, 140, 160), BLACK);   // exact build (tells RCs apart)
+    puck::display().drawString(String("build ") + FW_BUILD, cx, 176);
     Ota::Phase ph = Ota::phase();
     uint16_t sc = (ph == Ota::AVAILABLE) ? GREEN
                 : (ph == Ota::FAILED || (ph == Ota::IDLE && Ota::lastError().length())) ? ORANGE
                 : DARKGREY;
-    M5.Display.setTextColor(sc, BLACK);
-    M5.Display.drawString(otaStatusText(), cx, 190);
+    puck::display().setTextColor(sc, BLACK);
+    puck::display().drawString(otaStatusText(), cx, 190);
 
     // bottom row: Check (left) | Versions (right)
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setTextSize(2);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setTextSize(2);
     int bw = w / 2 - 26;
     bool checking = Ota::configured() && Ota::phase() == Ota::CHECKING;
     uint16_t bc = otaBtnReady() ? CYAN : DARKGREY;
-    M5.Display.drawRoundRect(20, OTA_Y, bw, OTA_H, 6, bc);
-    M5.Display.setTextColor(bc, BLACK);
-    M5.Display.drawString(checking ? "Checking" : "Check", 20 + bw / 2, OTA_Y + OTA_H / 2);
+    puck::display().drawRoundRect(20, OTA_Y, bw, OTA_H, 6, bc);
+    puck::display().setTextColor(bc, BLACK);
+    puck::display().drawString(checking ? "Checking" : "Check", 20 + bw / 2, OTA_Y + OTA_H / 2);
     uint16_t vc = Ota::configured() ? GREEN : DARKGREY;
-    M5.Display.drawRoundRect(w / 2 + 6, OTA_Y, bw, OTA_H, 6, vc);
-    M5.Display.setTextColor(vc, BLACK);
-    M5.Display.drawString("Versions", w / 2 + 6 + bw / 2, OTA_Y + OTA_H / 2);
+    puck::display().drawRoundRect(w / 2 + 6, OTA_Y, bw, OTA_H, 6, vc);
+    puck::display().setTextColor(vc, BLACK);
+    puck::display().drawString("Versions", w / 2 + 6 + bw / 2, OTA_Y + OTA_H / 2);
   }
 
   // On-device version picker: install (or downgrade to) any published version.
   void drawVersions() {
-    int w = M5.Display.width(), cx = w / 2;
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(top_center); M5.Display.setFont(&fonts::Font0);
-    M5.Display.setTextSize(2); M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString(Ota::isBeta() ? "Firmware (beta)" : "Firmware", cx, 12);
-    M5.Display.setTextSize(1); M5.Display.setTextColor(DARKGREY, BLACK);
+    int w = puck::display().width(), cx = w / 2;
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(top_center); puck::display().setFont(&fonts::Font0);
+    puck::display().setTextSize(2); puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString(Ota::isBeta() ? "Firmware (beta)" : "Firmware", cx, 12);
+    puck::display().setTextSize(1); puck::display().setTextColor(DARKGREY, BLACK);
     char cur[36]; snprintf(cur, sizeof(cur), "current v%d  -  tap to install", FW_VERSION);
-    M5.Display.drawString(cur, cx, 36);
+    puck::display().drawString(cur, cx, 36);
 
     if (!Ota::versionsReady()) {
-      M5.Display.setTextSize(2); M5.Display.setTextColor(DARKGREY, BLACK);
-      M5.Display.drawString("loading...", cx, 120);
+      puck::display().setTextSize(2); puck::display().setTextColor(DARKGREY, BLACK);
+      puck::display().drawString("loading...", cx, 120);
       return;
     }
     int vers[24]; int n = Ota::versions(vers, 24);
     if (n == 0) {
-      M5.Display.setTextSize(2); M5.Display.setTextColor(DARKGREY, BLACK);
-      M5.Display.drawString("none found", cx, 120);
+      puck::display().setTextSize(2); puck::display().setTextColor(DARKGREY, BLACK);
+      puck::display().drawString("none found", cx, 120);
       return;
     }
     int maxRows = (236 - VTOP) / VROWH;
-    M5.Display.setTextSize(2);
+    puck::display().setTextSize(2);
     for (int i = 0; i < n && i < maxRows; i++) {
       int y = VTOP + i * VROWH; bool isCur = (vers[i] == FW_VERSION);
       char lbl[10]; snprintf(lbl, sizeof(lbl), "v%d", vers[i]);
-      M5.Display.setTextDatum(middle_left);  M5.Display.setTextColor(isCur ? GREEN : WHITE, BLACK);
-      M5.Display.drawString(lbl, 24, y);
-      M5.Display.setTextDatum(middle_right); M5.Display.setTextColor(isCur ? GREEN : CYAN, BLACK);
-      M5.Display.drawString(isCur ? "current" : "install", w - 24, y);
+      puck::display().setTextDatum(middle_left);  puck::display().setTextColor(isCur ? GREEN : WHITE, BLACK);
+      puck::display().drawString(lbl, 24, y);
+      puck::display().setTextDatum(middle_right); puck::display().setTextColor(isCur ? GREEN : CYAN, BLACK);
+      puck::display().drawString(isCur ? "current" : "install", w - 24, y);
     }
   }
 public:
@@ -1319,7 +1319,7 @@ public:
   bool onBack() override { if (showVers) { showVers = false; draw(); return true; } return false; }
   void loop() override {
     Provision::loop();                                 // self-restarts after a save
-    int w = M5.Display.width();
+    int w = puck::display().width();
 
     if (showVers) {                                    // version picker
       if (gTap.pressed) {
@@ -1364,58 +1364,58 @@ inline void drawEmote(const char* code, int cx, int cy) {
     for (int d = d0; d <= d1; d += 12) {
       float a = radians((float)d);
       int x = ax + (int)(cosf(a) * rad), y = ay + (int)(sinf(a) * rad);
-      if (!first) M5.Display.drawWedgeLine(px, py, x, y, th, th, col);
+      if (!first) puck::display().drawWedgeLine(px, py, x, y, th, th, col);
       px = x; py = y; first = false;
     }
   };
   if (!strcmp(code, "<3")) {                              // heart
-    M5.Display.fillSmoothCircle(cx - 17, cy - 12, 20, RED);
-    M5.Display.fillSmoothCircle(cx + 17, cy - 12, 20, RED);
-    M5.Display.fillTriangle(cx - 35, cy - 6, cx + 35, cy - 6, cx, cy + 34, RED);
+    puck::display().fillSmoothCircle(cx - 17, cy - 12, 20, RED);
+    puck::display().fillSmoothCircle(cx + 17, cy - 12, 20, RED);
+    puck::display().fillTriangle(cx - 35, cy - 6, cx + 35, cy - 6, cx, cy + 34, RED);
   } else if (!strcmp(code, ":)")) {                       // smiley
-    M5.Display.fillSmoothCircle(cx, cy, R, YELLOW);
-    M5.Display.fillSmoothCircle(cx - 14, cy - 10, 5, BLACK);
-    M5.Display.fillSmoothCircle(cx + 14, cy - 10, 5, BLACK);
+    puck::display().fillSmoothCircle(cx, cy, R, YELLOW);
+    puck::display().fillSmoothCircle(cx - 14, cy - 10, 5, BLACK);
+    puck::display().fillSmoothCircle(cx + 14, cy - 10, 5, BLACK);
     arc(cx, cy - 2, R * 0.55f, 28, 152, 2.5f, BLACK);     // smile (lower arc)
   } else if (!strcmp(code, ":D")) {                       // grin
-    M5.Display.fillSmoothCircle(cx, cy, R, YELLOW);
-    M5.Display.fillSmoothCircle(cx - 14, cy - 12, 5, BLACK);
-    M5.Display.fillSmoothCircle(cx + 14, cy - 12, 5, BLACK);
+    puck::display().fillSmoothCircle(cx, cy, R, YELLOW);
+    puck::display().fillSmoothCircle(cx - 14, cy - 12, 5, BLACK);
+    puck::display().fillSmoothCircle(cx + 14, cy - 12, 5, BLACK);
     int mr = 19, my = cy + 7;
-    M5.Display.fillSmoothCircle(cx, my, mr, BLACK);                            // open mouth
-    M5.Display.fillRect(cx - mr - 2, my - mr - 2, 2 * mr + 4, mr + 2, YELLOW); // mask upper half
-    M5.Display.fillRect(cx - mr + 3, my - 1, 2 * mr - 6, 3, WHITE);            // teeth
+    puck::display().fillSmoothCircle(cx, my, mr, BLACK);                            // open mouth
+    puck::display().fillRect(cx - mr - 2, my - mr - 2, 2 * mr + 4, mr + 2, YELLOW); // mask upper half
+    puck::display().fillRect(cx - mr + 3, my - 1, 2 * mr - 6, 3, WHITE);            // teeth
   } else if (!strcmp(code, "zZ")) {                       // sleeping
-    M5.Display.fillSmoothCircle(cx, cy, R, YELLOW);
-    M5.Display.drawWedgeLine(cx - 21, cy - 8, cx - 7, cy - 8, 2.0f, 2.0f, BLACK);  // closed eyes
-    M5.Display.drawWedgeLine(cx + 7, cy - 8, cx + 21, cy - 8, 2.0f, 2.0f, BLACK);
-    M5.Display.drawWedgeLine(cx - 6, cy + 14, cx + 6, cy + 14, 2.0f, 2.0f, BLACK); // calm mouth
+    puck::display().fillSmoothCircle(cx, cy, R, YELLOW);
+    puck::display().drawWedgeLine(cx - 21, cy - 8, cx - 7, cy - 8, 2.0f, 2.0f, BLACK);  // closed eyes
+    puck::display().drawWedgeLine(cx + 7, cy - 8, cx + 21, cy - 8, 2.0f, 2.0f, BLACK);
+    puck::display().drawWedgeLine(cx - 6, cy + 14, cx + 6, cy + 14, 2.0f, 2.0f, BLACK); // calm mouth
     auto Z = [&](int zx, int zy, int s, uint16_t col) {                          // a "z"
-      M5.Display.drawWedgeLine(zx, zy, zx + s, zy, 1.6f, 1.6f, col);
-      M5.Display.drawWedgeLine(zx + s, zy, zx, zy + s, 1.6f, 1.6f, col);
-      M5.Display.drawWedgeLine(zx, zy + s, zx + s, zy + s, 1.6f, 1.6f, col);
+      puck::display().drawWedgeLine(zx, zy, zx + s, zy, 1.6f, 1.6f, col);
+      puck::display().drawWedgeLine(zx + s, zy, zx, zy + s, 1.6f, 1.6f, col);
+      puck::display().drawWedgeLine(zx, zy + s, zx + s, zy + s, 1.6f, 1.6f, col);
     };
     Z(cx + 26, cy - 40, 10, CYAN);
     Z(cx + 20, cy - 26, 7, CYAN);
   } else if (!strcmp(code, "GM")) {                       // good morning: sun
-    M5.Display.fillSmoothCircle(cx, cy, 22, YELLOW);
+    puck::display().fillSmoothCircle(cx, cy, 22, YELLOW);
     for (int k = 0; k < 12; k++) {
       float a = k * (float)(PI / 6);
       int x0 = cx + (int)(cosf(a) * 30), y0 = cy + (int)(sinf(a) * 30);
       int x1 = cx + (int)(cosf(a) * 40), y1 = cy + (int)(sinf(a) * 40);
-      M5.Display.drawWedgeLine(x0, y0, x1, y1, 2.2f, 2.2f, ORANGE);
+      puck::display().drawWedgeLine(x0, y0, x1, y1, 2.2f, 2.2f, ORANGE);
     }
   } else if (!strcmp(code, "GN")) {                       // good night: crescent moon + star
-    M5.Display.fillSmoothCircle(cx - 6, cy, R, YELLOW);
-    M5.Display.fillSmoothCircle(cx + 12, cy - 6, R, BLACK);   // carve the crescent
+    puck::display().fillSmoothCircle(cx - 6, cy, R, YELLOW);
+    puck::display().fillSmoothCircle(cx + 12, cy - 6, R, BLACK);   // carve the crescent
     int sx = cx + 20, sy = cy - 22;                          // little star
-    M5.Display.drawWedgeLine(sx - 6, sy, sx + 6, sy, 1.4f, 1.4f, YELLOW);
-    M5.Display.drawWedgeLine(sx, sy - 6, sx, sy + 6, 1.4f, 1.4f, YELLOW);
+    puck::display().drawWedgeLine(sx - 6, sy, sx + 6, sy, 1.4f, 1.4f, YELLOW);
+    puck::display().drawWedgeLine(sx, sy - 6, sx, sy + 6, 1.4f, 1.4f, YELLOW);
   } else {                                                // fallback: the ASCII code
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(6);
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString(code, cx, cy);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(6);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString(code, cx, cy);
   }
 }
 
@@ -1455,28 +1455,28 @@ class EmojiApp : public App {
   // drawEmote() is a file-scope helper (above) so the incoming-ping overlay can reuse it.
 
   void drawPicker() {
-    int w = M5.Display.width(), cx = w / 2, cy = M5.Display.height() / 2;
-    M5.Display.fillScreen(BLACK);
+    int w = puck::display().width(), cx = w / 2, cy = puck::display().height() / 2;
+    puck::display().fillScreen(BLACK);
 
     // connection / friend count
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(1);
+    puck::display().setTextDatum(top_center);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
     String st = Broker::connected() ? (String(Friends::count()) + " friends")
                                     : (Broker::configured() ? "connecting..." : "no MQTT");
     if (Notify::muted()) st += "   muted";
-    M5.Display.setTextColor(Broker::connected() ? GREEN : ORANGE, BLACK);
-    M5.Display.drawString(st, cx, 6);
+    puck::display().setTextColor(Broker::connected() ? GREEN : ORANGE, BLACK);
+    puck::display().drawString(st, cx, 6);
 
     // recipient (tap the top strip to change)
-    M5.Display.setTextSize(2); M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("To: " + targetName(), cx, 24);
+    puck::display().setTextSize(2); puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("To: " + targetName(), cx, 24);
 
     // big emote (vector graphic)
     drawEmote(set[sel], cx, cy + 6);
 
     // controls
-    M5.Display.setTextSize(2); M5.Display.setTextColor(DARKGREY, BLACK);
-    M5.Display.drawString("<prev   SEND   next>", cx, M5.Display.height() - 22);
+    puck::display().setTextSize(2); puck::display().setTextColor(DARKGREY, BLACK);
+    puck::display().drawString("<prev   SEND   next>", cx, puck::display().height() - 22);
   }
 
 public:
@@ -1495,7 +1495,7 @@ public:
     // incoming pings are shown by the global overlay in main.cpp (works on any screen)
 
     if (gTap.pressed) {
-      int w = M5.Display.width();
+      int w = puck::display().width();
       if (gTap.y < 50) {                       // top strip -> change recipient
         cycleTarget();
       } else if (gTap.x < w / 3)      { sel = (sel + 5) % 6; dirty = true; }
@@ -1514,19 +1514,19 @@ public:
 
     if (banner.length() && millis() >= bannerUntil) {        // expired -> erase only the banner strip (no flicker)
       banner = "";
-      int y = M5.Display.height() - 52;
-      M5.Display.fillRect(0, y - 12, M5.Display.width(), 24, BLACK);
+      int y = puck::display().height() - 52;
+      puck::display().fillRect(0, y - 12, puck::display().width(), 24, BLACK);
     }
 
     if (dirty) { drawPicker(); dirty = false; bannerDrawn = false; }
 
     if (banner.length() && !bannerDrawn) {   // draw the "sent" banner ONCE over the picker (no per-frame flicker)
-      int cx = M5.Display.width() / 2, y = M5.Display.height() - 52;
-      M5.Display.fillRect(0, y - 12, M5.Display.width(), 24, BLACK);
-      M5.Display.setTextDatum(middle_center);
-      M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(2);
-      M5.Display.setTextColor(WHITE, BLACK);
-      M5.Display.drawString(banner, cx, y);
+      int cx = puck::display().width() / 2, y = puck::display().height() - 52;
+      puck::display().fillRect(0, y - 12, puck::display().width(), 24, BLACK);
+      puck::display().setTextDatum(middle_center);
+      puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
+      puck::display().setTextColor(WHITE, BLACK);
+      puck::display().drawString(banner, cx, y);
       bannerDrawn = true;
     }
   }
@@ -1553,24 +1553,24 @@ class FriendsApp : public App {
 
   // ----- shared on-screen keyboard (ADD = hex, NAME = alpha) -----
   void drawKeyboard(const char* const* rows, int nRows, const char* title, const char* okLabel) {
-    int w = M5.Display.width();
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setFont(&fonts::Font0); M5.Display.setTextSize(1);
-    M5.Display.setTextColor(DARKGREY, BLACK);
-    M5.Display.drawString(title, w / 2, 6);
-    M5.Display.setTextDatum(middle_center); M5.Display.setTextSize(3);
-    M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString(typed.length() ? typed : String("_"), w / 2, 32);
-    M5.Display.setTextSize(2);
+    int w = puck::display().width();
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(top_center);
+    puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
+    puck::display().setTextColor(DARKGREY, BLACK);
+    puck::display().drawString(title, w / 2, 6);
+    puck::display().setTextDatum(middle_center); puck::display().setTextSize(3);
+    puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString(typed.length() ? typed : String("_"), w / 2, 32);
+    puck::display().setTextSize(2);
     for (int r = 0; r < nRows; r++) {
       const char* row = rows[r];
       for (int i = 0; row[i]; i++) {
         int x = i * KW, y = KB_TOP + r * KH;
-        M5.Display.drawRoundRect(x + 1, y + 1, KW - 2, KH - 2, 3, DARKGREY);
+        puck::display().drawRoundRect(x + 1, y + 1, KW - 2, KH - 2, 3, DARKGREY);
         char s[2] = { row[i], 0 };
-        M5.Display.setTextColor(CYAN, BLACK);
-        M5.Display.drawString(s, x + KW / 2, y + KH / 2);
+        puck::display().setTextColor(CYAN, BLACK);
+        puck::display().drawString(s, x + KW / 2, y + KH / 2);
       }
     }
     int by = KB_TOP + nRows * KH;
@@ -1578,15 +1578,15 @@ class FriendsApp : public App {
     uint16_t cols[3] = { ORANGE, DARKGREY, GREEN };
     for (int i = 0; i < 3; i++) {
       int x = i * (w / 3);
-      M5.Display.drawRoundRect(x + 2, by + 1, w / 3 - 4, 34, 4, cols[i]);
-      M5.Display.setTextColor(cols[i], BLACK);
-      M5.Display.drawString(labels[i], x + (w / 3) / 2, by + 18);
+      puck::display().drawRoundRect(x + 2, by + 1, w / 3 - 4, 34, 4, cols[i]);
+      puck::display().setTextColor(cols[i], BLACK);
+      puck::display().drawString(labels[i], x + (w / 3) / 2, by + 18);
     }
   }
 
   // returns true if OK was pressed
   bool handleKbTap(int x, int y, const char* const* rows, int nRows, int maxLen) {
-    int w = M5.Display.width(), by = KB_TOP + nRows * KH;
+    int w = puck::display().width(), by = KB_TOP + nRows * KH;
     if (y >= by) {
       int b = x / (w / 3);
       if (b == 0) { if (typed.length()) typed.remove(typed.length() - 1); }
@@ -1605,68 +1605,68 @@ class FriendsApp : public App {
   }
 
   void drawHome() {
-    int w = M5.Display.width();
-    M5.Display.fillScreen(BLACK);
-    M5.Display.setTextDatum(top_center);
-    M5.Display.setFont(&fonts::Font0);
-    M5.Display.setTextSize(2); M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.drawString("Friends", w / 2, 6);
+    int w = puck::display().width();
+    puck::display().fillScreen(BLACK);
+    puck::display().setTextDatum(top_center);
+    puck::display().setFont(&fonts::Font0);
+    puck::display().setTextSize(2); puck::display().setTextColor(WHITE, BLACK);
+    puck::display().drawString("Friends", w / 2, 6);
 
     // shareable code + name/status
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString(Friends::myCode(), w / 2, 28);
-    M5.Display.setTextSize(1);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString(Friends::myCode(), w / 2, 28);
+    puck::display().setTextSize(1);
     String sub = Friends::myName();
     if (!Broker::connected()) sub += Broker::configured() ? "  (offline)" : "  (no MQTT)";
-    M5.Display.setTextColor(DARKGREY, BLACK);
-    M5.Display.drawString(sub, w / 2, 50);
+    puck::display().setTextColor(DARKGREY, BLACK);
+    puck::display().drawString(sub, w / 2, 50);
 
     // Add / Set name buttons
     int bw = 132, bh = 22, by = 62, ax = w / 2 - bw - 6, nx = w / 2 + 6;
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setTextSize(2);                        // readable button labels (wider boxes fit them)
-    M5.Display.drawRoundRect(ax, by, bw, bh, 5, GREEN);
-    M5.Display.setTextColor(GREEN, BLACK);
-    M5.Display.drawString("Add friend", ax + bw / 2, by + bh / 2);
-    M5.Display.drawRoundRect(nx, by, bw, bh, 5, CYAN);
-    M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.drawString("Set name", nx + bw / 2, by + bh / 2);
+    puck::display().setTextDatum(middle_center);
+    puck::display().setTextSize(2);                        // readable button labels (wider boxes fit them)
+    puck::display().drawRoundRect(ax, by, bw, bh, 5, GREEN);
+    puck::display().setTextColor(GREEN, BLACK);
+    puck::display().drawString("Add friend", ax + bw / 2, by + bh / 2);
+    puck::display().drawRoundRect(nx, by, bw, bh, 5, CYAN);
+    puck::display().setTextColor(CYAN, BLACK);
+    puck::display().drawString("Set name", nx + bw / 2, by + bh / 2);
 
     if (reqN == 0 && frN == 0) {
-      M5.Display.setTextDatum(top_center); M5.Display.setTextSize(1); M5.Display.setTextColor(DARKGREY, BLACK);
-      M5.Display.drawString("share your code, then Add a friend", w / 2, ROW_TOP + 18);
+      puck::display().setTextDatum(top_center); puck::display().setTextSize(1); puck::display().setTextColor(DARKGREY, BLACK);
+      puck::display().drawString("share your code, then Add a friend", w / 2, ROW_TOP + 18);
       return;
     }
 
     int y = ROW_TOP;
     for (int i = 0; i < reqN && y < 240 - REQH; i++, y += REQH) {     // incoming requests: name + device id
-      M5.Display.setFont(&fonts::Font0);
-      M5.Display.setTextSize(2); M5.Display.setTextDatum(top_left); M5.Display.setTextColor(ORANGE, BLACK);
-      M5.Display.drawString(req[i].name.length() ? req[i].name : String("(no name)"), 6, y + 1);
-      M5.Display.setTextSize(1); M5.Display.setTextColor(DARKGREY, BLACK);    // verify this id before accepting
-      M5.Display.drawString(String("id ") + req[i].code, 6, y + 20);
+      puck::display().setFont(&fonts::Font0);
+      puck::display().setTextSize(2); puck::display().setTextDatum(top_left); puck::display().setTextColor(ORANGE, BLACK);
+      puck::display().drawString(req[i].name.length() ? req[i].name : String("(no name)"), 6, y + 1);
+      puck::display().setTextSize(1); puck::display().setTextColor(DARKGREY, BLACK);    // verify this id before accepting
+      puck::display().drawString(String("id ") + req[i].code, 6, y + 20);
       int bh2 = 22, by2 = y + (REQH - bh2) / 2;
-      M5.Display.setTextDatum(middle_center); M5.Display.setTextSize(2);
-      M5.Display.drawRoundRect(w - 86, by2, 36, bh2, 4, GREEN);
-      M5.Display.setTextColor(GREEN, BLACK); M5.Display.drawString("OK", w - 86 + 18, by2 + bh2 / 2);
-      M5.Display.drawRoundRect(w - 44, by2, 36, bh2, 4, RED);
-      M5.Display.setTextColor(RED, BLACK);   M5.Display.drawString("X", w - 44 + 18, by2 + bh2 / 2);
+      puck::display().setTextDatum(middle_center); puck::display().setTextSize(2);
+      puck::display().drawRoundRect(w - 86, by2, 36, bh2, 4, GREEN);
+      puck::display().setTextColor(GREEN, BLACK); puck::display().drawString("OK", w - 86 + 18, by2 + bh2 / 2);
+      puck::display().drawRoundRect(w - 44, by2, 36, bh2, 4, RED);
+      puck::display().setTextColor(RED, BLACK);   puck::display().drawString("X", w - 44 + 18, by2 + bh2 / 2);
     }
     for (int i = 0; i < frN && y < 240 - ROWH; i++, y += ROWH) {      // confirmed friends
-      M5.Display.setTextSize(2);                                       // name big...
-      M5.Display.setTextDatum(middle_left); M5.Display.setTextColor(GREEN, BLACK);
-      M5.Display.drawString(fr[i].nick.length() ? fr[i].nick : (fr[i].name.length() ? fr[i].name : fr[i].code), 6, y + ROWH / 2);
-      M5.Display.setTextSize(1);                                       // ...code + remove-x stay small (avoid collision)
-      M5.Display.setTextDatum(middle_right); M5.Display.setTextColor(DARKGREY, BLACK);
-      M5.Display.drawString(fr[i].code, w - 50, y + ROWH / 2);
-      M5.Display.drawRoundRect(w - 40, y + 2, 32, ROWH - 4, 4, DARKGREY);
-      M5.Display.setTextDatum(middle_center);
-      M5.Display.drawString("x", w - 40 + 16, y + ROWH / 2);
+      puck::display().setTextSize(2);                                       // name big...
+      puck::display().setTextDatum(middle_left); puck::display().setTextColor(GREEN, BLACK);
+      puck::display().drawString(fr[i].nick.length() ? fr[i].nick : (fr[i].name.length() ? fr[i].name : fr[i].code), 6, y + ROWH / 2);
+      puck::display().setTextSize(1);                                       // ...code + remove-x stay small (avoid collision)
+      puck::display().setTextDatum(middle_right); puck::display().setTextColor(DARKGREY, BLACK);
+      puck::display().drawString(fr[i].code, w - 50, y + ROWH / 2);
+      puck::display().drawRoundRect(w - 40, y + 2, 32, ROWH - 4, 4, DARKGREY);
+      puck::display().setTextDatum(middle_center);
+      puck::display().drawString("x", w - 40 + 16, y + ROWH / 2);
     }
   }
 
   void handleHomeTap(int x, int y) {
-    int w = M5.Display.width();
+    int w = puck::display().width();
     int bw = 132, bh = 22, by = 62, ax = w / 2 - bw - 6, nx = w / 2 + 6;
     if (y >= by && y <= by + bh) {
       if (x >= ax && x <= ax + bw) { mode = ADD;  typed = "";               dirty = true; return; }
