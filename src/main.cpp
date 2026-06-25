@@ -139,6 +139,7 @@ static bool gSetupShown = false;   // "finish setup" screen drawn once per entry
 void enterApp(int i) {
   active = apps[i];
   gSetupShown = false;
+  gTap.pressed = false;   // don't let the launcher chip-tap leak into the new app's onEnter() (e.g. Weather opened a grid cell)
   if (active->needsNet() && !Settings::haveWifi()) return;   // dispatch shows the setup prompt, not an empty app
   active->onEnter();
 }
