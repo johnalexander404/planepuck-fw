@@ -1859,6 +1859,18 @@ namespace Ota {
 
   bool configured() { return strlen(OTA_MANIFEST_URL) > 0; }
 
+  // Per-board OTA isolation: insert the compiled board suffix into each URL so a device can only ever
+  // name its OWN files. CoreS3 (PUCK_OTA_SUFFIX "") keeps the existing unsuffixed paths -> no fleet
+  // transition. e.g. waveshare -> version-waveshare_1_85c_box.json / firmware-waveshare_1_85c_box-vN.bin.
+  static String otaWithSuffix(const char* url, const char* marker) {
+    String s = url;
+    if (strlen(PUCK_OTA_SUFFIX)) { int i = s.lastIndexOf(marker); if (i >= 0) s = s.substring(0, i) + PUCK_OTA_SUFFIX + s.substring(i); }
+    return s;
+  }
+  static String otaManifestUrl() { return otaWithSuffix(OTA_MANIFEST_URL, ".json"); }
+  static String otaVersionsUrl() { return otaWithSuffix(OTA_VERSIONS_URL, ".json"); }
+  static String otaBinUrl(int v) { return otaWithSuffix(OTA_BIN_BASE, "-v") + v + ".bin"; }
+
   static void bump() { gVersion++; }
   static void setPhase(Phase p) { gPhase = p; bump(); }
   static void setError(const String& e) { xSemaphoreTake(mtx, portMAX_DELAY); gError = e; xSemaphoreGive(mtx); }
@@ -1890,7 +1902,7 @@ namespace Ota {
   // allowed (no newer-than-current gate). force -> flash silently; else -> pop the Update/Later overlay.
   void pushVersion(int v, bool force) {
     if (v <= 0 || gPhase == FLASHING || gPhase == DONE_REBOOTING) return;
-    String url = String(OTA_BIN_BASE) + v + ".bin";
+    String url = otaBinUrl(v);                    // board-scoped (PUCK_OTA_SUFFIX)
     xSemaphoreTake(mtx, portMAX_DELAY); gBinUrl = url; gNotes = String("version ") + v; xSemaphoreGive(mtx);
     gAvailVer = v; setError("");
     if (force) { gWantFlash = true; if (taskH) xTaskNotifyGive(taskH); }   // straight to doFlash()
@@ -1926,7 +1938,7 @@ namespace Ota {
     if (!Net::online() || !ClockService::synced()) return false;     // TLS needs a real clock
     WiFiClientSecure tls; tls.setCACert(MQTT_CA_CERT); tls.setHandshakeTimeout(15);
     HTTPClient http; http.setConnectTimeout(10000); http.setTimeout(12000);
-    if (!http.begin(tls, OTA_MANIFEST_URL)) return false;
+    if (!http.begin(tls, otaManifestUrl())) return false;            // board-scoped URL (PUCK_OTA_SUFFIX)
     int code = http.GET(); outCode = code; bool ok = false;
     if (code == 200) {
       JsonDocument doc;
@@ -1934,7 +1946,8 @@ namespace Ota {
         outVer   = doc["version"] | 0;
         outUrl   = String((const char*)(doc["url"]   | ""));
         outNotes = String((const char*)(doc["notes"] | ""));
-        ok = (outVer > 0 && outUrl.length());
+        const char* board = doc["board"] | "";                       // defense in depth: refuse another board's image
+        ok = (outVer > 0 && outUrl.length() && (!board[0] || strcmp(board, PUCK_BOARD_ID) == 0));
       }
     }
     log_e("[ota] manifest http=%d ok=%d ver=%d cur=%d heap=%u", code, ok, outVer, FW_VERSION, (unsigned)ESP.getFreeHeap());
@@ -1963,7 +1976,7 @@ namespace Ota {
     // 2) version list: prod sees "released" (finals), beta sees all "versions"; both floored at "min".
     int tmp[MAX_VERS]; int n = 0;
     { JsonDocument doc;
-      if (getJson(OTA_VERSIONS_URL, doc)) {
+      if (getJson(otaVersionsUrl().c_str(), doc)) {
         int mn = doc["min"] | 1;
         JsonArray rel = doc["released"].as<JsonArray>();
         JsonArray use = (beta || rel.isNull()) ? doc["versions"].as<JsonArray>() : rel;  // fallback: all

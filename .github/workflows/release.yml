@@ -158,7 +158,9 @@ jobs:
             exit 0
           fi
           # FINAL only — promote to the fleet: the polled manifest, the first-burn installer, the push.
-          printf '{ "version": %s, "url": "https://%s/planepuck/firmware-v%s.bin", "notes": "%s" }\n' "$N" "$FW_HOST" "$N" "$NOTES" > version.json
+          # board-tagged so a device refuses a mismatched image (per-board OTA isolation). CoreS3 keeps
+          # the unsuffixed firmware-v<N>.bin path; other boards get firmware-<board>-v<N>.bin (CI matrix, later).
+          printf '{ "version": %s, "url": "https://%s/planepuck/firmware-v%s.bin", "board": "m5cores3", "notes": "%s" }\n' "$N" "$FW_HOST" "$N" "$NOTES" > version.json
           scp version.json "$DROPLET:$DIR/version.json.tmp"
           ssh "$DROPLET" "chmod 644 $DIR/version.json.tmp && mv $DIR/version.json.tmp $DIR/version.json"
           scp planepuck-merged.bin "$DROPLET:$DIR/planepuck-merged.bin.tmp"
