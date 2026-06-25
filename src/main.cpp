@@ -4,6 +4,7 @@
 #include "App.h"
 #include "services.h"
 #include "apps.h"
+#include "layout.h"
 
 Tap gTap;   // definition (declared extern in App.h)
 
@@ -146,12 +147,13 @@ void enterApp(int i) {
 void backToLauncher() { if (active) active->onExit(); active = nullptr; drawLauncher(); }
 
 void drawBackChip() {
-  puck::display().fillRoundRect(4, 4, 34, 24, 5, DARKGREY);
+  int o = layout::inset();                              // round panels: inset off the clipped corner (0 on CoreS3)
+  puck::display().fillRoundRect(4 + o, 4 + o, 34, 24, 5, DARKGREY);
   puck::display().setTextDatum(middle_center);
   puck::display().setFont(&fonts::Font0);
   puck::display().setTextSize(2);
   puck::display().setTextColor(WHITE, DARKGREY);
-  puck::display().drawString("<", 21, 16);
+  puck::display().drawString("<", 21 + o, 16 + o);
 }
 
 // Full-screen prompt shown when a network app is opened before Wi-Fi is set up — instead of empty
@@ -549,7 +551,7 @@ void loop() {
   }
 
   if (active) {
-    if (gTap.pressed && gTap.x < 40 && gTap.y < 30) {   // back chip (always available)
+    if (gTap.pressed && gTap.x < 40 + layout::inset() && gTap.y < 30 + layout::inset()) {   // back chip (always available)
       gTap.pressed = false;
       if (!active->onBack()) backToLauncher();          // let the app step back a level first (e.g. radar->list)
     } else if (bB) {                                    // physical back button (>=2-button boards)

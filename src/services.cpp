@@ -20,6 +20,7 @@
 #include <esp_random.h>          // esp_random() — HW RNG for the self-enroll password
 #include "config.h"
 #include "services.h"
+#include "layout.h"
 
 // ===================== Settings (persisted in NVS) =====================
 namespace Settings {
@@ -601,7 +602,7 @@ namespace Notify {
 
   void draw() {
     if (millis() > dotUntil) return;
-    int x = puck::display().width() - 18, y = 18;
+    int x = puck::display().width() - 18 - layout::inset(), y = 18 + layout::inset();   // round: inset off the corner
     puck::display().fillCircle(x, y, 8, ORANGE);
     puck::display().fillCircle(x, y, 5, RED);
   }

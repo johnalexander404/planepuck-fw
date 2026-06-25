@@ -1707,7 +1707,7 @@ class FriendsApp : public App {
     }
 
     int y = ROW_TOP;
-    for (int i = 0; i < reqN && y < 240 - REQH; i++, y += REQH) {     // incoming requests: name + device id
+    for (int i = 0; i < reqN && y < puck::display().height() - REQH; i++, y += REQH) {     // incoming requests: name + device id
       puck::display().setFont(&fonts::Font0);
       puck::display().setTextSize(2); puck::display().setTextDatum(top_left); puck::display().setTextColor(ORANGE, BLACK);
       puck::display().drawString(req[i].name.length() ? req[i].name : String("(no name)"), 6, y + 1);
@@ -1720,7 +1720,7 @@ class FriendsApp : public App {
       puck::display().drawRoundRect(w - 44, by2, 36, bh2, 4, RED);
       puck::display().setTextColor(RED, BLACK);   puck::display().drawString("X", w - 44 + 18, by2 + bh2 / 2);
     }
-    for (int i = 0; i < frN && y < 240 - ROWH; i++, y += ROWH) {      // confirmed friends
+    for (int i = 0; i < frN && y < puck::display().height() - ROWH; i++, y += ROWH) {      // confirmed friends
       puck::display().setTextSize(2);                                       // name big...
       puck::display().setTextDatum(middle_left); puck::display().setTextColor(GREEN, BLACK);
       puck::display().drawString(fr[i].nick.length() ? fr[i].nick : (fr[i].name.length() ? fr[i].name : fr[i].code), 6, y + ROWH / 2);
