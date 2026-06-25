@@ -124,18 +124,22 @@ def cmd_groups(a):
 
 def cmd_send(a):
     require("mosquitto_pub")
-    test = test_set(a)
     t = a.target
-    if t == "prod":
+    if t in ("test", "prod"):
+        # Source of truth = the retained fleet/channel/<code> markers ON THE BROKER (set with
+        # `fleet.py channel <code> test`), NOT a local list. A device with no marker defaults to prod.
         dev = fetch_fleet(a, 3)
-        codes = sorted(c for c, d in dev.items() if d["online"] and c.upper() not in test)
-        offline = sum(1 for c, d in dev.items() if d["online"] is False and c.upper() not in test)
-        if not codes: sys.exit("no online prod devices (prod = reporting devices not in 'test')")
-        label = f"prod ({len(codes)} online" + (f", {offline} offline skipped)" if offline else ")")
-    elif t == "test":
-        codes = sorted(test)
-        if not codes: sys.exit("the 'test' group is empty — add codes to fleet-groups.json / FLEET_GROUPS")
-        label = f"test ({len(codes)})"
+        chan = lambda d: (d.get("channel") or "prod")
+        if t == "test":
+            codes = sorted(c for c, d in dev.items() if chan(d) == "test")
+            if not codes:
+                sys.exit("no devices on the 'test' channel — mark one with `fleet.py channel <code> test`")
+            label = f"test ({len(codes)})"
+        else:  # prod = online devices whose channel marker isn't 'test'
+            codes = sorted(c for c, d in dev.items() if d["online"] and chan(d) != "test")
+            offline = sum(1 for c, d in dev.items() if d["online"] is False and chan(d) != "test")
+            if not codes: sys.exit("no online prod devices")
+            label = f"prod ({len(codes)} online" + (f", {offline} offline skipped)" if offline else ")")
     elif HEX8.match(t):
         codes = [t.upper()]; label = f"device {codes[0]}"
     else:
