@@ -8,6 +8,11 @@
   #include <M5GFX.h>                       // provides lgfx::LovyanGFX, M5Canvas, fonts::, colors, datum
 #else
   #include <LovyanGFX.hpp>
+  // LovyanGFX (unlike M5GFX) doesn't define the TFT-style color-name constants the app draws with.
+  // Provide them (RGB565, matching M5GFX/TFT_eSPI) so the board-agnostic src/ compiles unchanged.
+  static constexpr uint16_t BLACK = 0x0000, WHITE = 0xFFFF, RED = 0xF800, GREEN = 0x07E0,
+                            CYAN  = 0x07FF, MAGENTA = 0xF81F, YELLOW = 0xFFE0, ORANGE = 0xFDA0,
+                            DARKGREY = 0x7BEF;
 #endif
 
 namespace puck {
