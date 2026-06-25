@@ -306,6 +306,7 @@ class WeatherApp : public App {
     if (haveScope) scope.pushSprite(0, 0);
     g = &puck::display();
   }
+  int focusIdx = 0;            // button nav: focused grid cell (multi-city view)
 
 public:
   WeatherApp() : App("Weather") {}
@@ -387,6 +388,18 @@ public:
       shownUpdating = upd;
     }
   }
+
+  // ---- button nav: city-grid cells (multi-city view; single/detail use the back chip) ----
+  bool focusCell(int i, int& x, int& y, int& w, int& h) {
+    int n = Weather::count();
+    if (showDetail || n <= 1 || i < 0 || i >= n) return false;
+    int cw = puck::display().width() / 2, ch = puck::display().height() / 2;
+    x = (i % 2) * cw; y = (i / 2) * ch; w = cw; h = ch; return true;
+  }
+  int  focusCount() override { int x, y, w, h, n = 0; while (focusCell(n, x, y, w, h)) n++; return n; }
+  void focusMove(int d) override { int n = focusCount(); if (!n) return; focusIdx = (focusIdx + d + n) % n; shownVer = 0xFFFFFFFF; }
+  void focusSelect() override { int x, y, w, h; if (focusCell(focusIdx, x, y, w, h)) { gTap.pressed = true; gTap.x = x + w / 2; gTap.y = y + h / 2; } }
+  void drawFocus() override { int x, y, w, h; if (focusCell(focusIdx, x, y, w, h)) puck::display().drawRoundRect(x + 2, y + 2, w - 4, h - 4, 4, WHITE); }
 };
 
 // ---------------- Flight ----------------
@@ -396,6 +409,7 @@ public:
 class FlightApp : public App {
   enum Mode { LIST, RADAR, DETAIL, SEARCH, HISTORY };
   static const int MAXN = 7;
+  int focusIdx = 0;             // button nav: focused LIST item (rows + Radar/Search buttons)
   Flight::Plane planes[MAXN];
   int      count = 0;
   Mode     mode = LIST;
@@ -1207,6 +1221,20 @@ public:
       dirty = false;
     }
   }
+
+  // ---- button nav: LIST rows + the Radar/Search buttons (RADAR/SEARCH/DETAIL stay touch/gesture) ----
+  bool focusItem(int i, int& x, int& y, int& w, int& h) {
+    if (mode != LIST) return false;
+    int W = puck::display().width();
+    if (i >= 0 && i < count)  { x = 0;         y = LIST_TOP + i * LIST_ROWH; w = W;         h = LIST_ROWH; return true; }
+    if (i == count)           { x = 0;         y = SEARCH_BTN_Y;             w = W / 2 - 2; h = 30; return true; }   // Radar
+    if (i == count + 1)       { x = W / 2 + 2; y = SEARCH_BTN_Y;             w = W / 2 - 2; h = 30; return true; }   // Search
+    return false;
+  }
+  int  focusCount() override { int x, y, w, h, n = 0; while (focusItem(n, x, y, w, h)) n++; return n; }
+  void focusMove(int d) override { int n = focusCount(); if (!n) return; focusIdx = (focusIdx + d + n) % n; dirty = true; }
+  void focusSelect() override { int x, y, w, h; if (focusItem(focusIdx, x, y, w, h)) { gTap.pressed = true; gTap.x = x + w / 2; gTap.y = y + h / 2; } }
+  void drawFocus() override { int x, y, w, h; if (focusItem(focusIdx, x, y, w, h)) puck::display().drawRoundRect(x, y, w, h, 3, WHITE); }
 };
 
 // ---------------- Settings ----------------
@@ -1215,6 +1243,7 @@ public:
 class SetupApp : public App {
   uint32_t shownOta = 0xFFFFFFFF;
   bool     showVers = false;                         // the on-device version picker is open
+  int      focusIdx = 0;                             // button nav: focused button / picker row
   uint32_t shownVerVer = 0xFFFFFFFF;                 // Ota::version() snapshot for the picker's lazy redraw
   static const int OTA_Y = 204, OTA_H = 30;          // bottom button row (Check | Versions)
   static const int VTOP = 56, VROWH = 26;            // version-picker rows
@@ -1348,6 +1377,26 @@ public:
     if (Ota::version() != shownOta) { shownOta = Ota::version(); draw(); }   // refresh status lazily
   }
   void onExit() override  { Provision::stop(); }
+
+  // ---- button nav: home Check/Versions buttons, or the version-picker rows ----
+  bool focusItem(int i, int& x, int& y, int& w, int& h) {
+    int W = puck::display().width();
+    if (showVers) {
+      if (!Ota::versionsReady()) return false;
+      int vers[24]; int n = Ota::versions(vers, 24), maxRows = (236 - VTOP) / VROWH;
+      if (n > maxRows) n = maxRows;
+      if (i < 0 || i >= n) return false;
+      x = 8; y = VTOP + i * VROWH - VROWH / 2; w = W - 16; h = VROWH; return true;
+    }
+    int bw = W / 2 - 26;
+    if (i == 0) { x = 20;        y = OTA_Y; w = bw; h = OTA_H; return true; }   // Check
+    if (i == 1) { x = W / 2 + 6; y = OTA_Y; w = bw; h = OTA_H; return true; }   // Versions
+    return false;
+  }
+  int  focusCount() override { int x, y, w, h, n = 0; while (focusItem(n, x, y, w, h)) n++; return n; }
+  void focusMove(int d) override { int n = focusCount(); if (!n) return; focusIdx = (focusIdx + d + n) % n; if (showVers) drawVersions(); else draw(); }
+  void focusSelect() override { int x, y, w, h; if (focusItem(focusIdx, x, y, w, h)) { gTap.pressed = true; gTap.x = x + w / 2; gTap.y = y + h / 2; } }
+  void drawFocus() override { int x, y, w, h; if (focusItem(focusIdx, x, y, w, h)) puck::display().drawRoundRect(x, y, w, h, 4, WHITE); }
 };
 
 // ---------------- Emoji Ping ----------------
@@ -1423,6 +1472,7 @@ class EmojiApp : public App {
   // ASCII "emotes" so they render in the default font. Swap for bitmaps later.
   const char* set[6] = {"<3", ":)", ":D", "zZ", "GM", "GN"};
   int sel = 0;
+  int focusIdx = 0;             // button nav: 0 = recipient, 1 = emote, 2 = send
   bool dirty = true;
   String banner = "";
   uint32_t bannerUntil = 0;
@@ -1530,6 +1580,23 @@ public:
       bannerDrawn = true;
     }
   }
+
+  // ---- button nav: recipient / emote / send ----
+  int  focusCount() override { return 3; }
+  void focusMove(int d) override { focusIdx = (focusIdx + d + 3) % 3; dirty = true; }
+  void focusSelect() override {
+    if (focusIdx == 0)      cycleTarget();                       // change recipient
+    else if (focusIdx == 1) { sel = (sel + 1) % 6; dirty = true; }   // next emote
+    else { gTap.pressed = true; gTap.x = puck::display().width() / 2;   // SEND (synthesize the center tap)
+           gTap.y = puck::display().height() / 2; }
+  }
+  void drawFocus() override {
+    int w = puck::display().width(), h = puck::display().height(), x, y, ww, hh;
+    if (focusIdx == 0)      { x = 4;          y = 14;       ww = w - 8; hh = 24; }   // recipient strip
+    else if (focusIdx == 1) { x = w / 2 - 44; y = h / 2-30; ww = 88;    hh = 72; }   // big emote
+    else                    { x = w / 2 - 64; y = h - 34;   ww = 128;   hh = 24; }   // SEND control
+    puck::display().drawRoundRect(x, y, ww, hh, 4, WHITE);
+  }
 };
 
 // ---------------- Friends ----------------
@@ -1549,6 +1616,7 @@ class FriendsApp : public App {
 
   static const int ROW_TOP = 92, ROWH = 23;
   static const int REQH = 34;            // incoming requests are 2 lines (name + device id) -> taller
+  int focusIdx = 0;                      // button nav: focused HOME item (Add / Set-name / request / friend)
   static const int KW = 32, KH = 30, KB_TOP = 58;
 
   // ----- shared on-screen keyboard (ADD = hex, NAME = alpha) -----
@@ -1734,4 +1802,30 @@ public:
       dirty = false;
     }
   }
+
+  // ---- button nav: HOME (Add / Set-name / request-OK / friend-row). Keypads stay touch. ----
+  bool focusItem(int i, int& x, int& y, int& w, int& h) {
+    if (mode != HOME) return false;
+    int W = puck::display().width(), bw = 132, bh = 22, by = 62;
+    if (i == 0) { x = W / 2 - bw - 6; y = by; w = bw; h = bh; return true; }   // Add friend
+    if (i == 1) { x = W / 2 + 6;      y = by; w = bw; h = bh; return true; }   // Set name
+    int ri = i - 2;
+    if (ri >= 0 && ri < reqN) { x = W - 90; y = ROW_TOP + ri * REQH + (REQH - 22) / 2; w = 40; h = 22; return true; }  // request OK
+    int fi = ri - reqN;
+    if (fi >= 0 && fi < frN)  { x = 4; y = ROW_TOP + reqN * REQH + fi * ROWH; w = W - 48; h = ROWH; return true; }     // friend row
+    return false;
+  }
+  int  focusCount() override { int x, y, w, h, n = 0; while (focusItem(n, x, y, w, h)) n++; return n; }
+  void focusMove(int d) override { int n = focusCount(); if (!n) return; focusIdx = (focusIdx + d + n) % n; dirty = true; }
+  void focusSelect() override {
+    int i = focusIdx;
+    if (i == 0)      { mode = ADD;  typed = "";                dirty = true; }
+    else if (i == 1) { mode = NAME; typed = Friends::myName(); dirty = true; }
+    else {
+      int ri = i - 2;
+      if (ri >= 0 && ri < reqN) { Friends::approve(req[ri].code); dirty = true; }   // accept the request
+      else { int fi = ri - reqN; if (fi >= 0 && fi < frN) { renameCode = fr[fi].code; typed = fr[fi].nick; mode = RENAME; dirty = true; } }
+    }
+  }
+  void drawFocus() override { int x, y, w, h; if (focusItem(focusIdx, x, y, w, h)) puck::display().drawRoundRect(x, y, w, h, 4, WHITE); }
 };
