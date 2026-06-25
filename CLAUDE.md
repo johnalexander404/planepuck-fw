@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PlanePuck is ESP32-S3 firmware for the **M5Stack CoreS3** — a touchscreen "app gadget" platform. It boots into a launcher that hosts small apps (Clock, Emoji Ping, Weather, Flight, Friends, Settings) backed by always-on services (time, auto-dimming, notifications, weather/flight fetchers, compass, friends/MQTT messaging). It runs **fully offline** by default; Wi-Fi/timezone/ZIP are set on-device at first boot (captive portal), while MQTT and other options live in `src/config.h`.
 
-Built with PlatformIO + Arduino framework. Display/touch/audio/RTC are all accessed through the `M5Unified` library (`M5.Display`, `M5.Touch`, `M5.Speaker`, `M5.Rtc`).
+Built with PlatformIO + Arduino framework. **All hardware is behind a board HAL in namespace `puck::`** — interfaces in `src/hal/*.h`, per-board implementations in `boards/<id>/*.cpp` selected per PlatformIO env (`build_src_filter` + `PUCK_BOARD_*`). So `src/` is board-agnostic and contains **no `M5.*` references**: one tree targets the M5Stack CoreS3 (whose `boards/m5cores3/` wraps `M5Unified`) and other boards (a `boards/waveshare_1_85c_box/` stub exists). Apps draw via `puck::display()` (an `lgfx::LovyanGFX`/M5GFX panel) + off-screen `puck::Canvas` sprites; input is `puck::Touch` plus optional physical-button focus nav (`puck::Buttons`). **Forker-facing docs live in [`docs/`](docs/)** (architecture, per-app pages, build/deploy, backend, OTA, buttons); this file is internal guidance. (Some detailed sections below still name `M5.*`/`M5Canvas` incidentally — the behavior is unchanged, only the access path moved to `puck::`.)
 
 ## Build & flash
 
