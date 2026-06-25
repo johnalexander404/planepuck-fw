@@ -50,6 +50,7 @@ void mqttRouter(const String& t, const String& p) {
   if (Friends::handleSocial(t, p)) return;   // social messages handled even when the app is closed
   if (t == OTA_PUSH_TOPIC) { Ota::checkNow(); return; }   // fleet "recheck the manifest now" nudge
   if (t.startsWith("fleet/ota/")) { Ota::onFleetCmd(p); return; }   // targeted version push to this device
+  if (t.startsWith("fleet/channel/")) { Ota::onChannel(p); return; }   // RC/prod channel marker (retained, operator-set)
   if (active) active->onMqtt(t, p);
 }
 

@@ -110,7 +110,9 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 #define OTA_PUSH_TOPIC    "puck/all/ota"                             // MQTT "re-check now" broadcast nudge
 #define OTA_BIN_BASE      "https://__FW_HOST__/planepuck/firmware-v"  // targeted/picked flash: base + <ver> + ".bin"
 #define OTA_VERSIONS_URL  "https://__FW_HOST__/planepuck/versions.json" // list of installable versions (on-device picker)
-#define OTA_TEST_URL      "https://__FW_HOST__/planepuck/test-devices.json" // {"test":[codes]}; a listed device sees RC versions
+// DEPRECATED + UNUSED: the test/RC channel now arrives as an authenticated, retained MQTT marker
+// (fleet/channel/<code>, operator-set) instead of this public URL — so device codes never go public.
+#define OTA_TEST_URL      "https://__FW_HOST__/planepuck/test-devices.json" // (unused; kept so an existing config.h stays in sync)
 
 // ---- Time ----
 // Timezone is also chosen on-device during Wi-Fi setup; this is the default

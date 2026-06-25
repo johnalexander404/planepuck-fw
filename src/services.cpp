@@ -65,6 +65,8 @@ namespace Settings {
   void saveTempF(bool f) { prefs.putBool("tempf", f); }
   bool clock12h() { return prefs.getBool("clk12", false); }
   void saveClock12h(bool v) { prefs.putBool("clk12", v); }
+  bool beta() { return prefs.getBool("beta", false); }              // RC channel flag; set via authenticated MQTT fleet/channel
+  void saveBeta(bool v) { prefs.putBool("beta", v); }
 }
 
 // ===================== Net =====================
@@ -1505,7 +1507,7 @@ namespace Broker {
 #endif
   static PubSubClient client(netClient);
   static void (*userCb)(const String&, const String&) = nullptr;
-  static const int MAX_SUBS = 4;          // friends inbox + OTA broadcast (+ headroom)
+  static const int MAX_SUBS = 5;          // friends inbox + OTA broadcast + fleet ota/channel (+ headroom)
   static String    subs[MAX_SUBS];
   static int       nSubs = 0;
   static TaskHandle_t taskH = nullptr;
@@ -1918,6 +1920,13 @@ namespace Ota {
     if (v > 0) pushVersion(v, force);
   }
 
+  // MQTT fleet/channel/<code> (retained, operator-set, authenticated): "test"/"beta" = RC channel, else prod.
+  // Cached in NVS so the picker knows the channel even before MQTT reconnects — and device codes never hit a public URL.
+  void onChannel(const String& payload) {
+    bool b = payload.equalsIgnoreCase("test") || payload.equalsIgnoreCase("beta");
+    if (b != gBeta) { gBeta = b; Settings::saveBeta(b); bump(); }
+  }
+
   void requestVersions() { gVerReady = false; gWantVersions = true; if (taskH) xTaskNotifyGive(taskH); }
   bool versionsReady()   { return gVerReady; }
   bool isBeta()          { return gBeta; }   // device is in the server's test list (picker shows RC builds)
@@ -1962,12 +1971,9 @@ namespace Ota {
   }
 
   static void fetchVersions() {
-    // 1) channel: a device listed in the server's test list sees RC builds; everyone else is prod.
-    bool beta = false;
-    { JsonDocument td; String me = Friends::myCode();
-      if (getJson(OTA_TEST_URL, td))
-        for (JsonVariant x : td["test"].as<JsonArray>())
-          if (me.equalsIgnoreCase((const char*)(x | ""))) { beta = true; break; } }
+    // 1) channel: set from the authenticated, retained MQTT marker fleet/channel/<code> (cached in NVS via
+    //    onChannel) — never a public URL, so device codes stay private. Default (no marker) = prod.
+    bool beta = gBeta;
 
     // 2) version list: prod sees "released" (finals), beta sees all "versions"; both floored at "min".
     int tmp[MAX_VERS]; int n = 0;
@@ -1985,7 +1991,7 @@ namespace Ota {
     xSemaphoreTake(mtx, portMAX_DELAY);
     gVerCount = n; for (int i = 0; i < n; i++) gVerList[i] = tmp[i];
     xSemaphoreGive(mtx);
-    gBeta = beta; gVerReady = true; bump();
+    gVerReady = true; bump();   // gBeta is owned by onChannel()/begin() (MQTT marker) — don't write it here
   }
 
   static void suspendNet() { Weather::suspend(); Flight::suspend(); Broker::suspend(); }
@@ -2050,10 +2056,12 @@ namespace Ota {
   void begin() {
     if (taskH || !configured()) return;
     mtx = xSemaphoreCreateMutex();
+    gBeta = Settings::beta();                                                // restore RC-channel flag (set via MQTT, cached in NVS)
     xTaskCreatePinnedToCore(otaTask, "ota", 24576, nullptr, 1, &taskH, 0);   // big stack: TLS + flash
     if (Broker::configured()) {
       Broker::subscribe(OTA_PUSH_TOPIC);                                     // fleet "recheck now" nudge
       Broker::subscribe("fleet/ota/" + Friends::myCode());                   // targeted version push to this device
+      Broker::subscribe("fleet/channel/" + Friends::myCode());              // RC/prod channel marker (retained, operator-set)
     }
   }
 

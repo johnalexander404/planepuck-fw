@@ -48,16 +48,18 @@ their own line):
 # OTA broadcast: every authenticated device may read this topic
 topic read puck/all/ota
 
-# Fleet telemetry: a device writes its own presence + version; reads its own targeted command
+# Fleet telemetry: a device writes its own presence + version; reads its own targeted command + channel
 pattern write fleet/status/%u
 pattern write fleet/online/%u
 pattern read fleet/ota/%u
+pattern read fleet/channel/%u
 
-# the operator account that rolls out updates: broadcast, plus see the fleet + push to one device
+# the operator account that rolls out updates: broadcast, plus see the fleet + push/channel to one device
 user ota-operator
 topic write puck/all/ota
 topic read fleet/#
 topic write fleet/ota/+
+topic write fleet/channel/+
 ```
 
 Create that operator account:
@@ -69,7 +71,9 @@ sudo systemctl reload mosquitto
 
 `puck/all/ota` is 3 topic levels, so it does **not** match the per-device `pattern write
 puck/+/+/%u` rule — devices can't publish it. Good. Likewise `fleet/ota/+` is operator-only, so a
-device can only *read* commands aimed at it, never send one to another device.
+device can only *read* commands aimed at it, never send one to another device. The same holds for
+`fleet/channel/+` (operator-only write; a device reads only its own `fleet/channel/%u`), so the
+test/RC channel is set by you over authenticated MQTT — **device codes never appear on any public URL**.
 
 > Skip step 3 entirely and OTA still works fully via the auto-poll; you just won't have instant
 > push or fleet visibility. The push only tells pucks to "re-check the manifest now" — the manifest
@@ -122,13 +126,17 @@ RCs, the picker filters by channel + a floor:
 - **test/beta** → the full version list incl. the in-progress RC, `≥ min`. The picker header reads
   `Firmware (beta)`.
 
-A device knows it's beta by checking whether **its own code is in the server's `test-devices.json`**
-(`OTA_TEST_URL`). That file is the `FLEET_GROUPS.test` list, published by the **`sync-test`** GitHub
-Action (Actions → sync-test → Run workflow, or `gh workflow run sync-test`) — it **overwrites**
-`test-devices.json` from the variable each run, so editing `FLEET_GROUPS` + re-running is the single
-control. `versions.json` carries `released` + `min`; CI computes `released` from the final tags and
-`min` from the **`OTA_MIN_VERSION`** repo variable (blank → 1). So the picker locks down without any
-per-device setup — same `FLEET_GROUPS` list drives both the auto-push (CI) and the device's channel.
+A device learns it's beta from a **retained, authenticated MQTT marker** `fleet/channel/<code>`
+(`"test"` / `"prod"`) that it reads over its own logged-in connection (ACL: a device reads only its
+own `fleet/channel/%u`) and caches in NVS. **Device codes never appear on a public URL** — this
+replaces the old public `test-devices.json`. Publish the markers with the **`sync-channels`** GitHub
+Action (Actions → sync-channels → Run workflow, or `gh workflow run sync-channels`): it marks every
+`FLEET_GROUPS.test` code `"test"` and demotes any reporting non-test device to `"prod"`. Edit the
+`FLEET_GROUPS` secret + re-run to change membership; demote one device any time with
+`tools/fleet.py channel <code> prod`. `versions.json` carries `released` + `min`; CI computes
+`released` from the final tags and `min` from the **`OTA_MIN_VERSION`** repo variable (blank → 1).
+So the picker locks down with no per-device setup — the `FLEET_GROUPS` secret drives both the
+auto-push (CI) and the device's channel, and nothing leaks publicly.
 
 A targeted `send` is **not retained** (it's an immediate command), so the device must be online —
 check `list` first. Versions come from `versions.json` (CI regenerates it from the bins on disk), and
@@ -161,15 +169,18 @@ Both flows can run from the **Actions** tab (no laptop/droplet shell, uses the v
 - **release** → *Run workflow*: inputs `version` (blank = next), `rc` (checkbox), `notes`. It bumps
   `version.h` + tags + builds + publishes in one job (RC-gated exactly like a pushed tag). Equivalent
   to `tools/release.sh [rc] [version] "notes"`.
-- **fleet** → *Run workflow*: `command` = `list` / `send` / `broadcast`, with `target` / `version` /
-  `force`. Runs `tools/fleet.py` against the broker with the `MQTT_OPERATOR_*` secrets. Equivalent to
-  `tools/fleet.py …`. (`list` needs the operator `topic read fleet/#` ACL.)
-- **sync-test** → *Run workflow*: publishes `FLEET_GROUPS.test` to the droplet as `test-devices.json`
-  (overwrite), so those devices' pickers show RC builds. Run it after editing the `FLEET_GROUPS` variable.
+- **fleet** → *Run workflow*: `command` = `send` / `broadcast`, with `target` / `version` / `force`.
+  Runs `tools/fleet.py` against the broker with the `MQTT_OPERATOR_*` secrets. (`fleet.py list` is
+  **local-only** — it prints device codes, which must not land in public Actions logs.)
+- **sync-channels** → *Run workflow*: publishes each `FLEET_GROUPS.test` code as a retained,
+  authenticated `fleet/channel/<code>="test"` marker (and demotes reporting non-test devices to
+  `"prod"`), so those devices' pickers show RC builds — **no public file, no codes in the logs**. Run
+  it after editing the `FLEET_GROUPS` secret.
 
 CLI equivalents: `gh workflow run release -f version=18 -f rc=true -f notes=…` /
-`gh workflow run fleet -f command=send -f target=test -f version=18 -f force=true` (target = code or group;
-set the `FLEET_GROUPS` repo **variable** so group names resolve in CI).
+`gh workflow run fleet -f command=send -f target=test -f version=18 -f force=true` /
+`gh workflow run sync-channels` (target = code or group; set the `FLEET_GROUPS` repo **secret** so
+group names resolve in CI).
 
 ### Staged release candidates (test before promoting to the fleet)
 A normal cut above is a **final** — it moves the fleet's `version.json` to the new version, so every

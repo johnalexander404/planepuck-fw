@@ -2,15 +2,18 @@ name: fleet
 
 # Run fleet operations from the Actions tab (Actions -> fleet -> "Run workflow") instead of a local
 # shell — uses the MQTT operator secrets from the vault. Wraps tools/fleet.py over TLS to the broker.
+# Only `send`/`broadcast` here: run `fleet.py list` LOCALLY — it prints device codes, which would
+# otherwise land in this public repo's Actions logs. (For `send`, prefer a group name like `test`
+# over a raw code, so the code isn't shown in the run's inputs either.)
 # Requires the operator ACLs from tools/OTA-SETUP.md (topic read fleet/#, write fleet/ota/+ + puck/all/ota).
 on:
   workflow_dispatch:
     inputs:
       command:
-        description: 'list | send | broadcast'
+        description: 'send | broadcast   (run `fleet.py list` locally — it would print codes to public logs)'
         type: choice
-        options: [list, send, broadcast]
-        default: list
+        options: [send, broadcast]
+        default: send
         required: true
       target:
         description: 'device code OR group name e.g. test/prod (send only)'
@@ -38,7 +41,7 @@ jobs:
           FLEET_PORT: '8883'                       # TLS frontend; fleet.py adds --capath on 8883
           FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
           FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
-          FLEET_GROUPS: ${{ vars.FLEET_GROUPS }}      # repo variable: {"test":[...],"prod":[...]}
+          FLEET_GROUPS: ${{ secrets.FLEET_GROUPS }}   # secret: {"test":[...]} — device codes stay out of public logs
           CMD: ${{ inputs.command }}
           TARGET: ${{ inputs.target }}
           VERSION: ${{ inputs.version }}
@@ -48,13 +51,13 @@ jobs:
             echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets (the ota-operator account)"; exit 1
           fi
           case "$CMD" in
-            list)
-              python3 tools/fleet.py list --wait 4 ;;
             send)
               if [ -z "$TARGET" ] || [ -z "$VERSION" ]; then echo "::error::send needs 'target' (code/group) + 'version'"; exit 1; fi
-              ARGS=(send "$TARGET" "$VERSION"); [ "$FORCE" = "true" ] && ARGS+=(--force)
+              # --quiet so device codes never reach the public Actions log
+              ARGS=(send "$TARGET" "$VERSION" --quiet); [ "$FORCE" = "true" ] && ARGS+=(--force)
               python3 tools/fleet.py "${ARGS[@]}" ;;
             broadcast)
               if [ -z "$VERSION" ]; then echo "::error::broadcast needs 'version'"; exit 1; fi
               python3 tools/fleet.py broadcast "$VERSION" ;;
+            *) echo "::error::'$CMD' not supported here — use send/broadcast; run 'fleet.py list' locally"; exit 1 ;;
           esac

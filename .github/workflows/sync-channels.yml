@@ -1,0 +1,32 @@
+name: sync-channels
+
+# Publish each test device's update channel as a retained, AUTHENTICATED MQTT marker
+# (fleet/channel/<code> = "test" / "prod") via tools/fleet.py. Replaces the old sync-test, which wrote
+# a PUBLIC test-devices.json — so device codes never appear on a public URL or in these logs (the
+# step prints only counts). A device reads its own marker over its authenticated MQTT connection and
+# its picker shows RC builds iff it's "test". Source of truth = the FLEET_GROUPS secret's "test" array.
+# Run: Actions -> sync-channels -> Run workflow   (or: gh workflow run sync-channels)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+      - name: Publish retained channel markers
+        env:
+          FLEET_HOST: ${{ secrets.MQTT_HOST }}     # broker domain (kept out of tracked source)
+          FLEET_PORT: '8883'                       # TLS frontend; fleet.py adds --capath on 8883
+          FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          FLEET_GROUPS: ${{ secrets.FLEET_GROUPS }}  # secret: {"test":[...]} — codes never printed
+        run: |
+          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ] || [ -z "${FLEET_GROUPS:-}" ]; then
+            echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER/PASS + FLEET_GROUPS secrets (the ota-operator account)"; exit 1
+          fi
+          python3 tools/fleet.py sync-channels    # prints counts only, never device codes

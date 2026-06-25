@@ -33,6 +33,8 @@ namespace Settings {
   void saveTempF(bool f);
   bool clock12h();                    // true = 12-hour clock (AM/PM), false = 24-hour (default)
   void saveClock12h(bool v);
+  bool beta();                        // true = RC/test channel (picker shows RC builds); set via authenticated MQTT
+  void saveBeta(bool v);
 }
 
 // On-device Wi-Fi setup: a SoftAP + captive portal. Pick network + timezone in a
@@ -272,9 +274,10 @@ namespace Ota {
   // force=false -> pops the Update/Later overlay; force=true -> flashes silently. No "newer-only" gate.
   void     pushVersion(int v, bool force);
   void     onFleetCmd(const String& payload);   // MQTT fleet/ota/<code> JSON {"v":N,"force":0|1}
+  void     onChannel(const String& payload);    // MQTT fleet/channel/<code>: "test"/"beta" -> RC channel, else prod
   // On-device version picker: ask the task to fetch OTA_VERSIONS_URL, then read the result.
   void     requestVersions();
   bool     versionsReady();     // true once a fetch has populated the list (or failed -> empty)
   int      versions(int* out, int maxN);   // copy available versions (newest first); returns count
-  bool     isBeta();            // device is in the server's test list -> the picker includes RC builds
+  bool     isBeta();            // device is on the test/RC channel (set via authenticated MQTT) -> picker includes RC builds
 }

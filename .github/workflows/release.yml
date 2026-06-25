@@ -175,15 +175,16 @@ jobs:
         env:
           FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
           FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
-          FLEET_GROUPS: ${{ vars.FLEET_GROUPS }}     # repo variable: {"test":["<code>",...]}
+          FLEET_GROUPS: ${{ secrets.FLEET_GROUPS }}  # secret: {"test":["<code>",...]} — device codes stay out of public logs
           MQTT_HOST: ${{ secrets.MQTT_HOST }}        # broker domain (kept out of tracked source)
           N: ${{ steps.ver.outputs.n }}
         run: |
           if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_GROUPS:-}" ] || [ -z "${MQTT_HOST:-}" ]; then
-            echo "::warning::RC published but NOT auto-pushed — set MQTT_OPERATOR_* + MQTT_HOST secrets + the FLEET_GROUPS variable (with a 'test' list). Install manually: tools/fleet.py send <code> $N --force"; exit 0
+            echo "::warning::RC published but NOT auto-pushed — set MQTT_OPERATOR_* + MQTT_HOST + FLEET_GROUPS secrets (with a 'test' list). Install manually from your machine: tools/fleet.py send <code> $N --force"; exit 0
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
-          FLEET_HOST="$MQTT_HOST" FLEET_PORT=8883 python3 tools/fleet.py send test "$N" --force \
+          # --quiet: device codes never reach the public Actions log
+          FLEET_HOST="$MQTT_HOST" FLEET_PORT=8883 python3 tools/fleet.py send test "$N" --force --quiet \
             || echo "::warning::auto-push to 'test' failed (group empty, or all test devices offline) — RC is still installable via fleet.py / the on-device picker"
 
       - name: MQTT push (optional instant nudge)

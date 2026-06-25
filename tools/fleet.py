@@ -7,9 +7,10 @@ credential. Devices publish retained telemetry that this reads:
     fleet/status/<code>   {"v":<fw>,"n":"<name>"}   (retained)
     fleet/online/<code>   "1" on connect / "0" via LWT on drop   (retained)
 
-and obey a targeted command this publishes:
+and obey commands this publishes:
 
     fleet/ota/<code>      {"v":<ver>,"force":0|1}
+    fleet/channel/<code>  "test"|"prod"  (retained — the device's update channel; replaces the public test-devices.json)
 
 GROUPS — there are two buckets:
   * test = an explicit allow-list you maintain (codes you use for release candidates).
@@ -19,8 +20,8 @@ The 'test' list comes from (in order) --groups <file>, the FLEET_GROUPS env var 
 tools/fleet-groups.json next to this script:   { "test": ["DEADBEEF", "CAFEF00D"] }
 `send` accepts: a group NAME (test / prod), or a single 8-hex device CODE.
 
-Auth (operator account on the broker — needs ACL `topic read fleet/#` + `topic write fleet/ota/+`,
-plus `topic write puck/all/ota` for broadcast):
+Auth (operator account on the broker — needs ACL `topic read fleet/#` + `topic write fleet/ota/+`
++ `topic write fleet/channel/+`, plus `topic write puck/all/ota` for broadcast):
   env  FLEET_HOST (required: your broker domain)  FLEET_PORT (8883)  FLEET_USER  FLEET_PASS  FLEET_CAFILE
   or flags --host/--port/--user/--pass/--cafile/--groups  (flags win over env)
 
@@ -31,6 +32,8 @@ Examples:
   tools/fleet.py send test 18 --force       # the test group, silent
   tools/fleet.py send prod 18               # every online device not in test
   tools/fleet.py broadcast 18               # nudge the whole fleet to recheck the manifest
+  tools/fleet.py channel DEADBEEF test      # put one device on the RC channel (retained, authenticated)
+  tools/fleet.py sync-channels              # publish the whole 'test' list as channel markers (replaces sync-test)
 """
 import argparse, json, os, re, shutil, subprocess, sys
 
@@ -136,15 +139,21 @@ def cmd_send(a):
         sys.exit(f"'{t}' is not 'test', 'prod', or an 8-hex device code")
     payload = json.dumps({"v": a.version, "force": 1 if a.force else 0})
     how = "silent flash" if a.force else "Update/Later prompt"
-    print(f"-> {label}: install v{a.version} ({how})")
+    # --quiet (CI / public logs): never print device codes — only counts.
+    if not a.quiet:
+        print(f"-> {label}: install v{a.version} ({how})")
     # NOT retained: a targeted command is immediate (a retained one would re-fire on every reconnect).
     fail = 0
     for c in codes:
         r = subprocess.run(["mosquitto_pub", *conn_args(a), "-t", f"fleet/ota/{c}", "-m", payload])
-        print(f"   {c}: {'sent' if r.returncode == 0 else 'FAILED'}")
+        if not a.quiet:
+            print(f"   {c}: {'sent' if r.returncode == 0 else 'FAILED'}")
         if r.returncode: fail += 1
+    if a.quiet:
+        print(f"-> install v{a.version} ({how}): {len(codes) - fail}/{len(codes)} device(s) sent")
     if fail: sys.exit(f"{fail}/{len(codes)} publishes failed")
-    print("done — devices must be online to receive (check `fleet.py list`).")
+    if not a.quiet:
+        print("done — devices must be online to receive (check `fleet.py list`).")
 
 
 def cmd_broadcast(a):
@@ -154,6 +163,33 @@ def cmd_broadcast(a):
                         "-m", str(a.version), "-r"])
     if r.returncode: sys.exit(r.returncode)
     print(f"-> broadcast: whole fleet rechecks the manifest (payload v{a.version}, retained).")
+
+
+def _set_channel(a, code, val):
+    return subprocess.run(["mosquitto_pub", *conn_args(a),
+                           "-t", f"fleet/channel/{code.upper()}", "-m", val, "-r"]).returncode
+
+
+def cmd_channel(a):
+    require("mosquitto_pub")
+    if not HEX8.match(a.code): sys.exit(f"'{a.code}' is not an 8-hex device code")
+    val = "test" if a.channel in ("test", "beta") else "prod"
+    if _set_channel(a, a.code, val): sys.exit("publish failed")
+    print(f"-> channel set to {val} (retained)" if a.quiet
+          else f"-> {a.code.upper()}: channel set to {val} (retained)")
+
+
+def cmd_sync_channels(a):
+    """Authenticated replacement for the public test-devices.json: mark every 'test' device 'test'
+    (retained, so it applies even when offline) and demote any reporting non-test device to 'prod'.
+    Only counts are printed — never the codes — so it's safe in public CI logs."""
+    require("mosquitto_pub")
+    test = test_set(a)
+    if not test: sys.exit("the 'test' group is empty — add codes to fleet-groups.json / FLEET_GROUPS")
+    n_test = sum(_set_channel(a, c, "test") == 0 for c in sorted(test))
+    others = [c for c in fetch_fleet(a, a.wait) if c.upper() not in test]   # reporting non-test devices
+    n_prod = sum(_set_channel(a, c, "prod") == 0 for c in others)
+    print(f"-> channels synced: {n_test} test, {n_prod} prod (retained; new/offline non-test devices default to prod).")
 
 
 def main():
@@ -177,11 +213,22 @@ def main():
     ps.add_argument("target", help="test | prod | 8-hex device code")
     ps.add_argument("version", type=int)
     ps.add_argument("--force", action="store_true", help="silent flash (no on-device confirm)")
+    ps.add_argument("--quiet", action="store_true", help="don't print device codes (for CI / public Actions logs)")
     ps.set_defaults(fn=cmd_send)
 
     pb = sub.add_parser("broadcast", help="nudge the whole fleet to recheck the manifest")
     pb.add_argument("version", type=int)
     pb.set_defaults(fn=cmd_broadcast)
+
+    pc = sub.add_parser("channel", help="set one device's update channel (authenticated, retained)")
+    pc.add_argument("code", help="8-hex device code")
+    pc.add_argument("channel", choices=["test", "beta", "prod"])
+    pc.add_argument("--quiet", action="store_true", help="don't print the device code")
+    pc.set_defaults(fn=cmd_channel)
+
+    psc = sub.add_parser("sync-channels", help="publish the 'test' list as retained channel markers (replaces public test-devices.json)")
+    psc.add_argument("--wait", type=int, default=3, help="seconds to collect telemetry (to find prod devices to demote)")
+    psc.set_defaults(fn=cmd_sync_channels)
 
     a = p.parse_args()
     if not a.host:
