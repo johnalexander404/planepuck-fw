@@ -334,12 +334,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now planepuck-enroll
 systemctl status planepuck-enroll --no-pager
 ```
-Make sure the Mosquitto password file exists and is writable by the broker:
+Make sure the Mosquitto password file exists and is owned correctly. Newer Mosquitto **refuses to
+load a passwd file that isn't owned by `root`** (it warns "owner is not root"), so set owner `root`
+(the root enroll service still writes it) with group `mosquitto` + mode `640` so the broker can read
+it on reload:
 ```bash
 sudo touch /etc/mosquitto/passwd
-sudo chown mosquitto:mosquitto /etc/mosquitto/passwd
+sudo chown root:mosquitto /etc/mosquitto/passwd
 sudo chmod 640 /etc/mosquitto/passwd
 ```
+(Running enroll as a non-root user instead? Use `chmod 660` and add that user to the `mosquitto`
+group — see the locked-down note in `planepuck-enroll.service`.)
 
 ## 3. Route /enroll through Caddy
 Use the `fw.example.com` block in `tools/enroll.Caddyfile` (adds `handle /enroll → reverse_proxy
