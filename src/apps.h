@@ -16,14 +16,16 @@ inline void drawSpotifyMark(lgfx::LovyanGFX* t, int cx, int cy, int R) {
   uint16_t bar   = t->color565(0, 0, 0);                 // black bars (the real Spotify mark)
   t->fillSmoothCircle(cx, cy, R, green);
   float s = R / 16.0f;
-  const float yc[3] = { 6.0f, 7.0f, 8.0f }, rr[3] = { 11.0f, 8.0f, 5.0f }, sw[3] = { 0.95f, 0.92f, 0.88f };
-  float bw = R / 8.0f; if (bw < 1.3f) bw = 1.3f;         // bar thickness scales with size
+  // Three CONCENTRIC arcs (shared virtual centre cyOff below the logo) at evenly-spaced radii -> the
+  // bars stay parallel and clearly separated. Shallow sweep keeps the ends from drooping into the next.
+  const float cyOff = 22.0f, rr[3] = { 27.0f, 22.0f, 17.0f }, sweep = 0.46f;   // R=16 design units
+  float bw = R / 9.0f; if (bw < 1.3f) bw = 1.3f;        // bar thickness scales with size
   for (int b = 0; b < 3; b++) {
     int px0 = 0, py0 = 0;
-    for (int i = 0; i <= 14; i++) {
-      float th = -sw[b] + (2.0f * sw[b]) * i / 14.0f;     // 0 = bar's top (middle), +/- = ends
+    for (int i = 0; i <= 16; i++) {
+      float th = -sweep + (2.0f * sweep) * i / 16.0f;    // 0 = top (middle), +/- = ends
       int px = cx + (int)lroundf(rr[b] * s * sinf(th));
-      int py = cy + (int)lroundf((yc[b] - rr[b] * cosf(th)) * s);
+      int py = cy + (int)lroundf((cyOff - rr[b] * cosf(th)) * s);
       if (i) t->drawWedgeLine(px0, py0, px, py, bw, bw, bar);
       px0 = px; py0 = py;
     }
