@@ -31,5 +31,8 @@ Or, with no toolchain, build the merged image + serve the **ESP Web Tools** inst
 
 ## Adding another board
 Copy `boards/waveshare_1_85c_box/` as a starting skeleton, implement the `puck::` interfaces, add an
-`[env:…]`, and give it a unique `PUCK_BOARD_ID` / `PUCK_OTA_SUFFIX` so its OTA stays isolated. Full
-steps in [architecture.md](architecture.md#add-a-board).
+`[env:…]`, and give it a unique `PUCK_BOARD_ID` / `PUCK_OTA_SUFFIX` so its OTA stays isolated. Then add
+**one row** to the build matrix in [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+(`{env, suffix, board_id}`) so CI builds + publishes its per-board artifacts, and an `<option>` to the
+board chooser in [`tools/webinstall/index.html`](../tools/webinstall/index.html). Full steps in
+[architecture.md](architecture.md#add-a-board).

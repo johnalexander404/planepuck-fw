@@ -2312,7 +2312,7 @@ namespace Fleet {
   static String gLastName = "\x01";          // sentinel so the first connect always publishes
 
   static void publishStatus() {              // retained -> the operator sees last-known even when offline
-    JsonDocument d; d["v"] = FW_VERSION; d["n"] = Friends::myName();
+    JsonDocument d; d["v"] = FW_VERSION; d["n"] = Friends::myName(); d["b"] = PUCK_BOARD_ID;  // board so the operator can filter/target by type
     String s; serializeJson(d, s);
     Broker::publish("fleet/status/" + Friends::myCode(), s, true);
   }

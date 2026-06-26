@@ -82,42 +82,56 @@ test/RC channel is set by you over authenticated MQTT — **device codes never a
 ## Fleet management (see devices, push a specific version)
 
 Once the `fleet/*` ACLs above are in place, every connected puck publishes retained telemetry
-(`fleet/status/<code>` = `{v,n}`, `fleet/online/<code>` = `1`/`0` via Last-Will), and `tools/fleet.py`
-(wraps `mosquitto_sub`/`mosquitto_pub`, no pip deps) reads it and sends targeted updates:
+(`fleet/status/<code>` = `{v,n,b}` — version, name, **board id** — `fleet/online/<code>` = `1`/`0` via
+Last-Will), and `tools/fleet.py` (wraps `mosquitto_sub`/`mosquitto_pub`, no pip deps) reads it and
+sends targeted, **board-safe** updates (each device resolves its own board's bin from its compiled
+suffix, so a push can never cross-flash):
 
 ```bash
-export FLEET_USER=ota-operator FLEET_PASS=<password>     # FLEET_HOST defaults to mqtt.example.com:8883
-tools/fleet.py list                       # CODE / NAME / VER / online / GROUP
-tools/fleet.py groups                     # list defined groups + members
-tools/fleet.py send CAFEF00D 16           # one device -> pops Update/Later there
-tools/fleet.py send CAFEF00D 16 --force   # silent flash (device must be online; downgrade allowed)
-tools/fleet.py send test 18 --force       # every device in the 'test' group
-tools/fleet.py broadcast 16               # nudge the whole fleet to recheck the manifest
+export FLEET_USER=ota-operator FLEET_PASS=<password>      # FLEET_HOST defaults to mqtt.example.com:8883
+tools/fleet.py list                          # CODE / NAME / VER / BOARD / KIND / STATUS
+tools/fleet.py list --board m5cores3          # filter to one board type
+tools/fleet.py list --kind test --json        # filter by kind; --json for machines / a future FE
+tools/fleet.py send CAFEF00D 16               # one device -> pops Update/Later there
+tools/fleet.py send CAFEF00D 16 --force        # silent flash (device must be online; downgrade allowed)
+tools/fleet.py send all 18 --board m5cores3    # every online CoreS3
+tools/fleet.py send test 18 --board m5cores3   # every online CoreS3 whose kind is 'test'
+tools/fleet.py channel CAFEF00D test           # set a device's kind (test/prod/xyz; test/beta see RCs)
+tools/fleet.py broadcast 16                    # nudge the whole fleet to recheck the manifest
 ```
 
-### Device groups: test (a list) vs prod (the default)
-There are two buckets. **`test`** is an explicit allow-list you maintain. **`prod` is the default** —
-every reporting device that is *not* in `test`. So a freshly-enrolled device is prod automatically; you
-never edit a prod list (prod is computed live from telemetry, never stored). `send` takes a single
-8-hex device **code**, or the name **`test`** / **`prod`**.
+> These commands print and target **device codes** (= MQTT usernames). Run them **locally** or from a
+> **private** ops repo's Actions — never the public firmware repo, whose logs are world-readable. The
+> ready-to-copy private workflow + setup is in [`ops/README.md`](ops/README.md).
 
-The `test` list is read from (in order) `--groups <file>`, the `FLEET_GROUPS` env var (inline JSON),
-or `tools/fleet-groups.json`:
+### Kinds: a per-device label (test / prod / …)
+A device's **kind** is a **retained, authenticated** marker `fleet/channel/<code>` it reads over its
+own connection (default **`prod`** when unset). It drives two things: which devices a `send <kind>`
+targets, and — binary — which builds its on-device picker shows: **`test`/`beta` see every build for
+their board; any other kind sees released only**. `list` shows it in the KIND column.
+
+Set one device's kind directly, then target it:
+
+```bash
+tools/fleet.py channel CAFEF00D test    # arbitrary label ^[a-z0-9_-]{2,16}$; 'prod' clears the marker
+tools/fleet.py send test 18 --force     # every online device whose kind is 'test'
+```
+
+`send <kind>` resolves from the **live** channel markers (not a stored list), so it always matches what
+`list` shows; add `--board <id>` to scope to one board type.
+
+**Bulk helper (optional).** To set many devices at once, keep a `test` allow-list and run
+`fleet.py sync-channels`: it marks every listed code `test` and demotes any reporting non-listed device
+to `prod`. The list is read from `--groups <file>`, the `FLEET_GROUPS` env var (inline JSON), or
+`tools/fleet-groups.json`:
 
 ```json
 { "test": ["DEADBEEF", "CAFEF00D"] }
 ```
 
-`tools/fleet-groups.json` is **gitignored** (device codes are your MQTT usernames — keep them out of
-the public repo); copy `tools/fleet-groups.json.example` to start. Workflow: cut an RC → push it to
-test (`fleet.py send test 18 --force`) → verify → promote to everyone with a final cut, or roll it
-with `fleet.py send prod 18` (every online device not in test). For **GitHub Actions**, put the same
-JSON in a repo **variable** `FLEET_GROUPS` (Settings → Secrets and variables → Actions → Variables) —
-the `fleet` workflow reads it, so `test`/`prod` resolve there too without committing codes.
-
-To move a device from prod into test, just add its code to the `test` list (local file or the
-`FLEET_GROUPS` variable). Removing it from `test` returns it to prod. There's no per-device flag on
-the device or broker — membership is purely this operator-side list.
+`tools/fleet-groups.json` is **gitignored** (device codes are MQTT usernames — keep them out of the
+public repo); copy `tools/fleet-groups.json.example` to start. In the **private ops repo's** Actions,
+put the same JSON in a `FLEET_GROUPS` secret so `sync-channels` resolves there too.
 
 ### On-device version picker: who sees RC builds, and the floor
 `Settings → Versions` lets a device install a specific version. To keep prod devices off in-progress
@@ -126,22 +140,21 @@ RCs, the picker filters by channel + a floor:
 - **test/beta** → the full version list incl. the in-progress RC, `≥ min`. The picker header reads
   `Firmware (beta)`.
 
-A device learns it's beta from a **retained, authenticated MQTT marker** `fleet/channel/<code>`
-(`"test"` / `"prod"`) that it reads over its own logged-in connection (ACL: a device reads only its
-own `fleet/channel/%u`) and caches in NVS. **Device codes never appear on a public URL** — this
-replaces the old public `test-devices.json`. Publish the markers with the **`sync-channels`** GitHub
-Action (Actions → sync-channels → Run workflow, or `gh workflow run sync-channels`): it marks every
-`FLEET_GROUPS.test` code `"test"` and demotes any reporting non-test device to `"prod"`. Edit the
-`FLEET_GROUPS` secret + re-run to change membership; demote one device any time with
-`tools/fleet.py channel <code> prod`. `versions.json` carries `released` + `min`; CI computes
-`released` from the final tags and `min` from the **`OTA_MIN_VERSION`** repo variable (blank → 1).
-So the picker locks down with no per-device setup — the `FLEET_GROUPS` secret drives both the
-auto-push (CI) and the device's channel, and nothing leaks publicly.
+A device learns its kind from a **retained, authenticated MQTT marker** `fleet/channel/<code>` that it
+reads over its own logged-in connection (ACL: a device reads only its own `fleet/channel/%u`) and
+caches in NVS. **Device codes never appear on a public URL** — this replaces the old public
+`test-devices.json`. Set the markers from the **private ops repo** (or locally): `fleet.py channel
+<code> <kind>` for one device, or the `sync-channels` bulk helper for a whole `FLEET_GROUPS.test` list;
+demote one device any time with `tools/fleet.py channel <code> prod`. The board-suffixed
+`versions{suffix}.json` carries `released` + `min`; CI computes `released` from the final tags (∩ that
+board's published bins) and `min` from the **`OTA_MIN_VERSION`** repo variable (blank → 1). So the
+picker locks down with no per-device setup, and nothing leaks publicly.
 
 A targeted `send` is **not retained** (it's an immediate command), so the device must be online —
-check `list` first. Versions come from `versions.json` (CI regenerates it from the bins on disk), and
-the device builds the download URL from the compiled `OTA_BIN_BASE` + version, so only a *published*
-binary can ever be installed. On-device, the same picker lives in **Settings → Versions**.
+check `list` first. Versions come from the board-suffixed `versions{suffix}.json` (CI regenerates each
+board's from its own bins), and the device builds the download URL from the compiled `OTA_BIN_BASE` +
+suffix + version, so only a *published* binary for that board can ever be installed. On-device, the
+same picker lives in **Settings → Versions**.
 
 ### Broadcast not arriving? two server-side causes
 The firmware path is correct (it subscribes `puck/all/ota` and routes it to the updater). If a release
@@ -165,22 +178,18 @@ tools/release.sh 7 "short notes"      # or force a specific version
 ```
 
 ### From GitHub Actions instead of a local shell
-Both flows can run from the **Actions** tab (no laptop/droplet shell, uses the vault secrets):
-- **release** → *Run workflow*: inputs `version` (blank = next), `rc` (checkbox), `notes`. It bumps
-  `version.h` + tags + builds + publishes in one job (RC-gated exactly like a pushed tag). Equivalent
-  to `tools/release.sh [rc] [version] "notes"`.
-- **fleet** → *Run workflow*: `command` = `send` / `broadcast`, with `target` / `version` / `force`.
-  Runs `tools/fleet.py` against the broker with the `MQTT_OPERATOR_*` secrets. (`fleet.py list` is
-  **local-only** — it prints device codes, which must not land in public Actions logs.)
-- **sync-channels** → *Run workflow*: publishes each `FLEET_GROUPS.test` code as a retained,
-  authenticated `fleet/channel/<code>="test"` marker (and demotes reporting non-test devices to
-  `"prod"`), so those devices' pickers show RC builds — **no public file, no codes in the logs**. Run
-  it after editing the `FLEET_GROUPS` secret.
+The **public** firmware repo runs only the **build/release** workflow; all fleet *management* (which
+prints/targets device codes) moved to a **private** ops repo — see [`ops/README.md`](ops/README.md).
 
-CLI equivalents: `gh workflow run release -f version=18 -f rc=true -f notes=…` /
-`gh workflow run fleet -f command=send -f target=test -f version=18 -f force=true` /
-`gh workflow run sync-channels` (target = code or group; set the `FLEET_GROUPS` repo **secret** so
-group names resolve in CI).
+- **release** (public) → *Run workflow*: inputs `version` (blank = next), `rc` (checkbox), `notes`. It
+  bumps `version.h` + tags, a **per-board matrix** builds + publishes every board, then a finalise step
+  runs (RC → auto-push to the `test` kind with `--quiet` so no codes hit the log; final → fleet
+  broadcast + the board-chooser installer page). RC-gated exactly like a pushed tag. Equivalent to
+  `tools/release.sh [rc] [version] "notes"`. CLI: `gh workflow run release -f version=18 -f rc=true -f notes=…`.
+- **fleet** (private `planepuck-ops` repo) → *Run workflow*: `command` = `list` / `send` / `channel` /
+  `broadcast`. Runs `tools/fleet.py` (checked out from this public repo) against the broker with the
+  operator secrets from that repo's vault. `list` prints full codes — fine, the logs are private. Copy
+  the template + set secrets per [`ops/README.md`](ops/README.md).
 
 ### Staged release candidates (test before promoting to the fleet)
 A normal cut above is a **final** — it moves the fleet's `version.json` to the new version, so every
@@ -190,20 +199,23 @@ device is offered it. To test a build on a few devices first, cut a **release ca
 tools/release.sh rc "short notes"     # tag fw-v<N>-rc<M> for the next version N
 ```
 
-An RC build publishes `firmware-v<N>.bin` + adds N to `versions.json` (it does **not** move the fleet's
-`version.json`/manifest, and sends no broadcast) — and then **auto-deploys to the `test` group**: CI
-runs `fleet.py send test N --force` so your online test devices flash it immediately. Prereqs for the
-auto-push: the `MQTT_OPERATOR_*` secrets + a `FLEET_GROUPS` repo **variable** containing a `test` list
-(else the RC is still published, just not auto-pushed — install it manually). So the two-job loop:
+Each board's RC build publishes its `firmware{suffix}-v<N>.bin` + adds N to that board's
+`versions{suffix}.json` (it does **not** move the fleet's `version{suffix}.json`/manifest, and sends no
+broadcast) — and then the finalise job **auto-deploys to the `test` kind**: CI runs `fleet.py send test
+N --force --quiet` so every online device marked `test` flashes it immediately (each resolves its own
+board's bin, so one push is board-safe). Prereqs: the `MQTT_OPERATOR_*` secrets + at least one device
+marked `test` (set with `fleet.py channel`/`sync-channels` from the private ops repo; else the RC is
+still published, just not auto-pushed — install it manually). So the two-job loop:
 
 1. **Cut RC → test:** `tools/release.sh rc "notes"` (or `gh workflow run release -f rc=true -f notes=…`).
-   Tags `fw-v<N>-rc<M>`, publishes the bin, and flashes the **test** group. The rest of the fleet is
-   untouched. (Re-run to continue: `release.sh rc` → the next `rc<M>` on the same N.)
+   Tags `fw-v<N>-rc<M>`, builds every board, publishes the bins, and flashes the **test** kind across
+   all boards. The rest of the fleet is untouched. (Re-run to continue: `release.sh rc` → the next
+   `rc<M>` on the same N.)
 2. **Promote → prod:** when happy, `tools/release.sh "notes"` (no `rc`) or
    `gh workflow run release -f notes="promote"`. With no version given it **finalises the in-flight
-   candidate** (cuts `fw-v<N>` for the same N, the same tested commit) → CI sets `version.json` = N +
-   installer + broadcast → the whole fleet (incl. test) auto-updates. *(Gradual prod: `fleet.py send
-   prod N` after the final cut.)*
+   candidate** (cuts `fw-v<N>` for the same N, the same tested commit) → CI sets each board's
+   `version{suffix}.json` = N + installer + broadcast → the whole fleet (incl. test) auto-updates.
+   *(Gradual prod: `fleet.py send prod N` after the final cut.)*
 
 > Auto-push reaches only test devices that are **online** when CI runs (targeted commands aren't
 > retained). Offline ones get it on the next `fleet.py send test N` or, once promoted, the normal poll.

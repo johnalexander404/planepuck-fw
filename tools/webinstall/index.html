@@ -34,7 +34,14 @@
   <h1>Install PlanePuck</h1>
   <p class="sub">Flash a fresh PlanePuck right from your browser</p>
 
-  <esp-web-install-button manifest="/planepuck/manifest.json">
+  <p class="board"><label>Board&nbsp;
+    <select id="board" style="font:inherit;font-size:15px;padding:7px 10px;border-radius:9px"
+            onchange="document.getElementById('ewt').manifest=this.value">
+      <option value="/planepuck/manifest.json">M5Stack CoreS3</option>
+      <option value="/planepuck/manifest-waveshare_1_85c_box.json">Waveshare 1.85&quot; (LCD-1.85C)</option>
+    </select></label></p>
+
+  <esp-web-install-button id="ewt" manifest="/planepuck/manifest.json">
     <button class="btn" slot="activate">Install PlanePuck</button>
     <span slot="unsupported">⚠️ Use desktop <b>Chrome</b> or <b>Edge</b> — your browser can't access USB serial.</span>
     <span slot="not-allowed">⚠️ Pick the device's serial port when prompted to continue.</span>

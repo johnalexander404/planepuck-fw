@@ -1,0 +1,87 @@
+name: fleet
+
+# PRIVATE fleet-management workflow for PlanePuck.
+#
+# Copy this file to `.github/workflows/fleet.yml` in a PRIVATE repo (e.g. `planepuck-ops`). Its Actions
+# logs print device codes (MQTT usernames), so it MUST live in a private repo — never in the public
+# firmware repo. It pulls tools/fleet.py from the PUBLIC firmware repo (no code duplication) and runs it
+# with operator MQTT secrets from THIS repo's vault. See tools/ops/README.md.
+#
+# Required secrets in THIS (private) repo:  MQTT_HOST, MQTT_OPERATOR_USER, MQTT_OPERATOR_PASS
+# Optional:                                 FLEET_GROUPS (only for the `sync-channels` bulk helper)
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'list | send | channel | broadcast | sync-channels'
+        type: choice
+        options: [list, send, channel, broadcast, sync-channels]
+        default: list
+        required: true
+      target:
+        description: 'send: device CODE | all | kind (test/prod/xyz)   ·   channel: device CODE'
+        required: false
+      board:
+        description: 'list/send filter: board id (e.g. m5cores3, waveshare_1_85c_box)'
+        required: false
+      kind:
+        description: 'list filter, or the kind to set for `channel` (test/prod/xyz)'
+        required: false
+      version:
+        description: 'send / broadcast: firmware version integer'
+        required: false
+      force:
+        description: 'send: silent flash, no on-device confirm'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  fleet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get fleet.py from the public firmware repo
+        uses: actions/checkout@v4
+        with:
+          repository: johnalexander404/planepuck-fw   # <- change if you forked the firmware repo
+          sparse-checkout: tools
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+      - name: fleet.py ${{ inputs.command }}
+        env:
+          FLEET_HOST: ${{ secrets.MQTT_HOST }}
+          FLEET_PORT: '8883'
+          FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          FLEET_GROUPS: ${{ secrets.FLEET_GROUPS }}
+          CMD: ${{ inputs.command }}
+          TARGET: ${{ inputs.target }}
+          BOARD: ${{ inputs.board }}
+          KIND: ${{ inputs.kind }}
+          VERSION: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ]; then
+            echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets in THIS repo"; exit 1
+          fi
+          BF=(); [ -n "$BOARD" ] && BF=(--board "$BOARD")
+          case "$CMD" in
+            list)
+              KF=(); [ -n "$KIND" ] && KF=(--kind "$KIND")
+              python3 tools/fleet.py list "${BF[@]}" "${KF[@]}" ;;   # private logs -> full codes OK
+            send)
+              if [ -z "$TARGET" ] || [ -z "$VERSION" ]; then echo "::error::send needs target + version"; exit 1; fi
+              A=(send "$TARGET" "$VERSION" "${BF[@]}"); [ "$FORCE" = "true" ] && A+=(--force)
+              python3 tools/fleet.py "${A[@]}" ;;
+            channel)
+              if [ -z "$TARGET" ] || [ -z "$KIND" ]; then echo "::error::channel needs target (code) + kind"; exit 1; fi
+              python3 tools/fleet.py channel "$TARGET" "$KIND" ;;
+            broadcast)
+              if [ -z "$VERSION" ]; then echo "::error::broadcast needs version"; exit 1; fi
+              python3 tools/fleet.py broadcast "$VERSION" ;;
+            sync-channels)
+              if [ -z "${FLEET_GROUPS:-}" ]; then echo "::error::sync-channels needs the FLEET_GROUPS secret"; exit 1; fi
+              python3 tools/fleet.py sync-channels ;;   # bulk-set the 'test' allow-list as retained markers
+            *) echo "::error::unknown command '$CMD'"; exit 1 ;;
+          esac

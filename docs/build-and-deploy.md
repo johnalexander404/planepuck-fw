@@ -53,19 +53,21 @@ tools/release.sh <N> "notes"        # FINAL: force version N
 tools/release.sh rc "notes"         # RC: candidate fw-v<N>-rc<M> (staged; not promoted to the fleet)
 ```
 
-- An **RC** publishes only `firmware-v<N>.bin` + `versions.json` (installable on test devices via the
-  picker / `fleet.py send`), and auto-pushes to the `test` group. It does **not** move the fleet's
-  `version.json` or broadcast.
-- A **FINAL** of the same `N` promotes it: writes the polled `version.json`, the merged image + web
-  installer, and (if MQTT operator secrets are set) nudges the fleet.
+- An **RC** publishes only each board's `firmware{suffix}-v<N>.bin` + `versions{suffix}.json`
+  (installable on test devices via the picker / `fleet.py send`), and auto-pushes to the `test` **kind**.
+  It does **not** move the fleet's `version{suffix}.json` or broadcast.
+- A **FINAL** of the same `N` promotes it: writes each board's polled `version{suffix}.json`, the merged
+  image + web installer, and (if MQTT operator secrets are set) nudges the fleet.
 
 ## CI (GitHub Actions)
-`.github/workflows/release.yml` (triggered by the `fw-v*` tag, or run from the Actions tab) checks
-out, **reconstructs `config.h` from `config.h.example` + vault secrets**, builds with PlatformIO, and
-publishes the firmware + manifest to your host (per-board paths; CoreS3 stays unsuffixed — see
-[ota.md](ota.md)). One-time setup + the exact secret/variable list is in
-[`tools/OTA-SETUP.md`](../tools/OTA-SETUP.md); the backend it deploys to is in [backend.md](backend.md).
-Other workflows: `fleet.yml` (operator ops) and `sync-channels.yml` (publish test-device channels).
+`.github/workflows/release.yml` (triggered by the `fw-v*` tag, or run from the Actions tab) checks out,
+**reconstructs `config.h` from `config.h.example` + vault secrets**, and builds **every board in a
+matrix** with PlatformIO, publishing each board's firmware + manifest to your host (per-board paths;
+CoreS3 stays unsuffixed — see [ota.md](ota.md)). One global `FW_VERSION` / `fw-v<N>` tag covers all
+boards. One-time setup + the exact secret/variable list is in [`tools/OTA-SETUP.md`](../tools/OTA-SETUP.md);
+the backend it deploys to is in [backend.md](backend.md). **Fleet management** (list/send/channel/
+broadcast) is *not* in this public repo — it lives in a **private** ops repo so device codes stay out of
+public logs; template + setup in [`tools/ops/README.md`](../tools/ops/README.md).
 
 ## Verify before you ship
 There's no auto-rollback for a bad-but-bootable image. **Flash + bench-test the exact build** (every
