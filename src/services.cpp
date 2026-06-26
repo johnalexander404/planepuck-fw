@@ -250,6 +250,13 @@ namespace Provision {
            "<input name=fhkey placeholder='unchanged if left blank'></div>");
 
     h += sec("<path d='M9 18V5l10-2v13'/><circle cx='6' cy='18' r='3'/><circle cx='16' cy='16' r='3'/>", "Spotify");
+    if (strlen(SPOTIFY_CLIENT_ID)) {                 // show the login link only when Spotify is configured (page is published)
+      h += F("<p style='margin:0 0 10px'><a href='");
+      h += SPOTIFY_LOGIN_URL;
+      h += F("' target=_blank rel=noopener>Log in with Spotify &raquo;</a>"
+             "<br><span style='color:#8a8d91;font-size:12px'>opens on the internet &mdash; use another device "
+             "(or rejoin your Wi-Fi) to log in, then paste the token below</span></p>");
+    }
     h += F("<label>Refresh token (paste from the Spotify login page; blank = keep)</label>"
            "<input name=sprt placeholder='unchanged if left blank'></div>");
 

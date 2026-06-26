@@ -423,7 +423,9 @@ CI injects it into `config.h` and `sed`-fills `tools/spotifylogin/index.html`, p
 `https://<FW_HOST>/spotify/` alongside the web installer (the `release` Action's page-publish step).
 
 ## 3. Each user links their account
-1. Open `https://fw.example.com/spotify/` in any browser and tap **Log in with Spotify**.
+1. Open `https://fw.example.com/spotify/` in any browser and tap **Log in with Spotify**. (The captive
+   portal's **Spotify** section links straight to this page once `SPOTIFY_CLIENT_ID` is set — but the
+   `PlanePuck-Setup` AP has no internet, so open the link on another device or after rejoining Wi-Fi.)
 2. After approving, the page shows a **refresh token** — tap **Copy**.
 3. On the puck: join `PlanePuck-Setup` Wi-Fi → `192.168.4.1` → **Spotify** → paste the token → **Save**.
 

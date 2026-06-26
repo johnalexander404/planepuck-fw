@@ -170,6 +170,7 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 // extended-quota review. Scopes: user-read-currently-playing user-read-playback-state user-modify-playback-state.
 #define SPOTIFY_CLIENT_ID  ""
 #define SPOTIFY_POLL_MS    4000     // currently-playing poll cadence while the app is open (ms)
+#define SPOTIFY_LOGIN_URL  "https://__FW_HOST__/spotify/"  // hosted PKCE login page; linked from the captive portal
 
 // Root CA for Spotify TLS — accounts.spotify.com, api.spotify.com, and the album-art CDN i.scdn.co all
 // chain to DigiCert Global Root G2 (separate from MQTT_CA_CERT, which is Let's Encrypt). Pinned with
