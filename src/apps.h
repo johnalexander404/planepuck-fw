@@ -920,10 +920,10 @@ class SpotifyApp : public App {
     if (!has) {
       bool tok = Spotify::tokenOk(); int hc = Spotify::nowHttp();   // diagnose why there's no track
       const char* head; const char* hint;
-      if (!tok)           { head = "Sign-in failed"; hint = "re-link in Settings"; }
-      else if (hc == 403) { head = "Needs Premium";  hint = "for Spotify playback"; }
-      else if (hc <= 0)   { head = "Connecting";     hint = "reaching Spotify"; }
-      else                { head = "Nothing playing"; hint = "play a track in Spotify"; }
+      if (!Spotify::authed())   { head = "Sign-in failed"; hint = "re-link in Settings"; }   // token actually rejected
+      else if (!tok || hc < 0)  { head = "Connecting";     hint = "reaching Spotify"; }       // refreshing/fetching (startup)
+      else if (hc == 403)       { head = "Needs Premium";  hint = "for Spotify playback"; }
+      else                      { head = "Nothing playing"; hint = "play a track in Spotify"; }
       drawSpotifyMark(g, w / 2, 58, 32);                            // green Spotify mark (disc + sound-wave bars)
       g->setTextDatum(top_center); g->setFont(&fonts::Font0);
       g->setTextSize(3); g->setTextColor(WHITE, BLACK);
