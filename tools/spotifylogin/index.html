@@ -75,10 +75,13 @@
     if(!CLIENT_ID || CLIENT_ID.indexOf('__')===0){err('This page has no Spotify client id configured yet.');return;}
     var v=rnd(64); sessionStorage.setItem('pkce_v',v);
     var ch=b64url(await sha256(v));
-    var u=new URL('https://accounts.spotify.com/authorize');
-    u.search=new URLSearchParams({response_type:'code',client_id:CLIENT_ID,redirect_uri:REDIRECT,
-      code_challenge_method:'S256',code_challenge:ch,scope:SCOPES}).toString();
-    location.href=u.toString();
+    // Everything except `scope` via URLSearchParams; `scope` appended with %20 separators (NOT the `+`
+    // that URLSearchParams emits — Spotify's /authorize doesn't reliably decode `+` to a space, which
+    // silently grants no scopes -> 403 on currently-playing). show_dialog forces re-consent so the
+    // requested scopes are actually granted even if the app was authorized before.
+    var p=new URLSearchParams({response_type:'code',client_id:CLIENT_ID,redirect_uri:REDIRECT,
+      code_challenge_method:'S256',code_challenge:ch,show_dialog:'true'});
+    location.href='https://accounts.spotify.com/authorize?'+p.toString()+'&scope='+encodeURIComponent(SCOPES);
   }
   async function exchange(code){
     var v=sessionStorage.getItem('pkce_v');
