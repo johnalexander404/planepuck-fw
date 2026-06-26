@@ -74,7 +74,12 @@ grep -E "^#define FW_VERSION" "$VER_FILE"
 
 git add "$VER_FILE"
 if git diff --cached --quiet; then
-  echo "==> version.h already at $NEW — tagging the current commit (same bits a prior rc tested)"
+  # Promoting an in-flight candidate (or re-cutting an rc): version.h is unchanged. Make an EMPTY commit
+  # anyway — it keeps the exact tree/bits the rc tested — so $TAG carries its OWN clean release notes
+  # instead of inheriting the prior rc's commit subject (CI publishes `git log -1 --pretty=%s` into
+  # version.json, which is shown on every device's update prompt).
+  echo "==> version.h already at $NEW — empty release commit so $TAG carries its own notes (same bits)"
+  git commit --allow-empty -m "release: firmware $LABEL${NOTES:+ — $NOTES}"
 else
   git commit -m "release: firmware $LABEL${NOTES:+ — $NOTES}"
 fi
