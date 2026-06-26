@@ -29,8 +29,9 @@ the focused one. On the single-button CoreS3 that's power-key **click = NEXT**, 
   [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) for a **Client ID**, add
   the redirect URI `https://<your-fw-host>/spotify/`, and build with `SPOTIFY_CLIENT_ID` set (the CI
   secret). Then **each user links their own account**: open `https://<your-fw-host>/spotify/`, log in
-  (Authorization Code + **PKCE** — no secret anywhere), copy the refresh token, and paste it into the
-  captive portal (Settings → **Spotify**). It's saved to NVS (`Settings::spotifyRefresh`, key `sprt`).
+  (Authorization Code + **PKCE** — no secret anywhere), copy the refresh token, then on the puck **open
+  the Settings app** (that starts the `PlanePuck-Setup` hotspot) and paste the token under **Spotify →
+  Refresh token** at `192.168.4.1`. It's saved to NVS (`Settings::spotifyRefresh`, key `sprt`).
 - **An active Spotify Connect device** for the controls — play/pause/skip target whatever's currently
   connected to Spotify. With nothing connected, controls return `404` and the app shows
   **"no active device"** (Now-Playing display still works).

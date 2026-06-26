@@ -427,7 +427,9 @@ CI injects it into `config.h` and `sed`-fills `tools/spotifylogin/index.html`, p
    portal's **Spotify** section links straight to this page once `SPOTIFY_CLIENT_ID` is set — but the
    `PlanePuck-Setup` AP has no internet, so open the link on another device or after rejoining Wi-Fi.)
 2. After approving, the page shows a **refresh token** — tap **Copy**.
-3. On the puck: join `PlanePuck-Setup` Wi-Fi → `192.168.4.1` → **Spotify** → paste the token → **Save**.
+3. On the puck: open the **Settings** app (this starts the `PlanePuck-Setup` hotspot; opening the
+   **Spotify** app while unlinked also routes there). Join `PlanePuck-Setup` → `192.168.4.1` →
+   **Spotify** → paste the token → **Save** (the puck restarts).
 
 The device refreshes its own access tokens from there (and re-saves the rotated refresh token). To
 **re-link** (revoked/expired token), just repeat step 3 — the app falls back to the "Link Spotify" prompt
