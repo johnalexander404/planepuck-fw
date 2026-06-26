@@ -106,12 +106,7 @@ void drawAppIcon(const char* name, int cx, int cy, uint16_t chip) {
     puck::display().drawWedgeLine(cx + 8,  cy - 3, cx + 16, cy - 11, 1.6f, 1.6f, ink);
     puck::display().fillTriangle(cx + 16, cy - 12, cx + 16, cy - 3, cx + 7, cy - 12, ink);  // arrowhead
   } else if (!strcmp(name, "Spotify")) {
-    // a two-note music glyph (beam + two stems + two note heads)
-    puck::display().fillRect(cx - 8, cy - 12, 2, 20, ink);                   // left stem
-    puck::display().fillRect(cx + 9, cy - 16, 2, 20, ink);                   // right stem
-    puck::display().fillRect(cx - 8, cy - 16, 19, 4, ink);                   // beam joining the stems
-    puck::display().fillSmoothCircle(cx - 10, cy + 8, 4, ink);               // left note head
-    puck::display().fillSmoothCircle(cx + 7,  cy + 4, 4, ink);               // right note head
+    drawSpotifyMark(&puck::display(), cx, cy, CHIP_R);   // the whole chip becomes the green Spotify mark
   } else {
     char c[2] = { name[0], 0 };                                      // fallback: first letter
     puck::display().setTextDatum(middle_center);

@@ -6,7 +6,29 @@
 #include "layout.h"
 #include <esp_heap_caps.h>     // PSRAM scratch buffer for the Spotify album-art JPEG
 #include <esp_random.h>        // esp_random() — matrix-rain glyph/seed jitter
-#include <math.h>              // sinf/cosf for the analog face hands
+#include <math.h>              // sinf/cosf for the analog face hands + the Spotify mark
+
+// The Spotify mark: a green disc with three black concave-down "sound-wave" bars, scaled to radius R.
+// The bars are sampled from our own trig (no dependence on the GFX arc-angle convention), so it renders
+// identically on the launcher chip and the now-playing screen, on either board. Designed at R=16.
+inline void drawSpotifyMark(lgfx::LovyanGFX* t, int cx, int cy, int R) {
+  uint16_t green = t->color565(30, 215, 96);
+  uint16_t bar   = t->color565(0, 0, 0);                 // black bars (the real Spotify mark)
+  t->fillSmoothCircle(cx, cy, R, green);
+  float s = R / 16.0f;
+  const float yc[3] = { 6.0f, 7.0f, 8.0f }, rr[3] = { 11.0f, 8.0f, 5.0f }, sw[3] = { 0.95f, 0.92f, 0.88f };
+  float bw = R / 8.0f; if (bw < 1.3f) bw = 1.3f;         // bar thickness scales with size
+  for (int b = 0; b < 3; b++) {
+    int px0 = 0, py0 = 0;
+    for (int i = 0; i <= 14; i++) {
+      float th = -sw[b] + (2.0f * sw[b]) * i / 14.0f;     // 0 = bar's top (middle), +/- = ends
+      int px = cx + (int)lroundf(rr[b] * s * sinf(th));
+      int py = cy + (int)lroundf((yc[b] - rr[b] * cosf(th)) * s);
+      if (i) t->drawWedgeLine(px0, py0, px, py, bw, bw, bar);
+      px0 = px; py0 = py;
+    }
+  }
+}
 
 // ---------------- Clock ----------------
 // Big local time that slowly drifts (anti-burn-in) + up to MAX_WORLD_CITIES world-clock rows.
@@ -899,14 +921,7 @@ class SpotifyApp : public App {
       else if (hc == 403) { head = "Needs Premium";  hint = "for Spotify playback"; }
       else if (hc <= 0)   { head = "Connecting";     hint = "reaching Spotify"; }
       else                { head = "Nothing playing"; hint = "play a track in Spotify"; }
-      uint16_t green = g->color565(30, 215, 96);                    // Spotify green
-      int lx = w / 2, ly = 58, R = 32;
-      g->fillSmoothCircle(lx, ly, R, green);                        // logo: green disc + white music note
-      g->fillRect(lx - 9, ly - 13, 3, 24, WHITE);                  // left stem
-      g->fillRect(lx + 10, ly - 17, 3, 24, WHITE);                 // right stem
-      g->fillRect(lx - 9, ly - 17, 22, 4, WHITE);                  // beam
-      g->fillSmoothCircle(lx - 11, ly + 11, 6, WHITE);             // left note head
-      g->fillSmoothCircle(lx + 9, ly + 7, 6, WHITE);               // right note head
+      drawSpotifyMark(g, w / 2, 58, 32);                            // green Spotify mark (disc + sound-wave bars)
       g->setTextDatum(top_center); g->setFont(&fonts::Font0);
       g->setTextSize(3); g->setTextColor(WHITE, BLACK);
       g->drawString(head, w / 2, 110);                             // bigger headline
