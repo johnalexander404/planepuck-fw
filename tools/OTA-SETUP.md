@@ -272,6 +272,9 @@ publishes the firmware + manifest to the droplet (same paths as the manual flow)
      server's `/etc/planepuck/enroll.env`. Set it to compile self-enroll into CI builds; omit and
      pucks fall back to a typed MQTT password. Generate with `openssl rand -hex 32`. See
      "Zero-touch enrollment" below.
+   - *(optional, for the Spotify app)* `SPOTIFY_CLIENT_ID` — your Spotify app's **Client ID** (public,
+     PKCE — there is no secret). Injected into `config.h` and the published login page. Omit and the
+     Spotify app shows "Link Spotify". See "Spotify linking" below.
 
 ## Cutting a release
 ```
@@ -392,3 +395,39 @@ mosquitto`, and change `ReadWritePaths=/etc/mosquitto` to the passwd file as nee
   just re-enrolls a fresh password and reconnects.
 - Rate limiting: the service has a coarse global limiter; for per-IP limits use the caddy-ratelimit
   plugin or fail2ban on its `journalctl -u planepuck-enroll` "bad or missing token" lines.
+
+---
+
+# Spotify linking — the "Now Playing" app
+
+The Spotify app needs each user's account linked once. There's **no client secret** anywhere: the device
+uses Authorization Code + **PKCE** and stores only a per-device **refresh token** in NVS.
+
+## 1. Register a Spotify app (one-time, operator)
+At [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) create an app and note its
+**Client ID** (public — there is no secret to keep). Under the app's settings, add the **Redirect URI**
+exactly:
+```
+https://fw.example.com/spotify/
+```
+(your `FW_HOST`, trailing slash required). Request scopes are set by the page itself:
+`user-read-currently-playing user-read-playback-state user-modify-playback-state`.
+
+> **Dev-mode cap:** a new Spotify app is in *development mode* and only works for up to **25 users you
+> add manually** in the dashboard. For a wider fleet, apply for Spotify's **extended quota** review.
+
+## 2. Set the CI secret
+Add `SPOTIFY_CLIENT_ID` to the repo's Actions secrets (the value is public, but kept with the others so
+`config.h` + the login page are filled at build). Omit it and the Spotify app simply shows "Link Spotify".
+CI injects it into `config.h` and `sed`-fills `tools/spotifylogin/index.html`, publishing it to
+`https://<FW_HOST>/spotify/` alongside the web installer (the `release` Action's page-publish step).
+
+## 3. Each user links their account
+1. Open `https://fw.example.com/spotify/` in any browser and tap **Log in with Spotify**.
+2. After approving, the page shows a **refresh token** — tap **Copy**.
+3. On the puck: join `PlanePuck-Setup` Wi-Fi → `192.168.4.1` → **Spotify** → paste the token → **Save**.
+
+The device refreshes its own access tokens from there (and re-saves the rotated refresh token). To
+**re-link** (revoked/expired token), just repeat step 3 — the app falls back to the "Link Spotify" prompt
+automatically when its token is rejected. **Playback controls need an active Spotify Connect device** (a
+phone/desktop/speaker currently playing); with none, play/pause/skip show "no active device".

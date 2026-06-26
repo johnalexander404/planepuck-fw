@@ -4,6 +4,9 @@
 #include "services.h"
 #include "config.h"
 #include "layout.h"
+#include <esp_heap_caps.h>     // PSRAM scratch buffer for the Spotify album-art JPEG
+#include <esp_random.h>        // esp_random() — matrix-rain glyph/seed jitter
+#include <math.h>              // sinf/cosf for the analog face hands
 
 // ---------------- Clock ----------------
 // Big local time that slowly drifts (anti-burn-in) + up to MAX_WORLD_CITIES world-clock rows.
@@ -13,10 +16,17 @@
 class ClockApp : public App {
   int      lastSec = -1, lastMin = -1;
   uint32_t lastPhase = 0xFFFFFFFF;
-  puck::Canvas band;                               // off-screen time+status band (PSRAM); blitted each tick
-  bool     haveBand = false;
+  puck::Canvas band;                               // Digital time+status band (PSRAM); blitted each tick
+  puck::Canvas face;                               // full-screen canvas for the Analog / Matrix faces
+  bool     haveBand = false, haveFace = false;
   bool     h12 = false;                        // 12-hour (AM/PM) vs 24-hour, from Settings (cached on enter)
+  int      faceIdx = 0;                        // 0=Digital 1=Analog 2=Matrix (tap the face to cycle; persisted)
+  uint32_t lastFrame = 0;                      // Matrix animation pacing
   static const int BAND_TOP = 44, BAND_H = 112;   // screen rows 44..156; cities live at >=156
+  // Matrix-rain state
+  static const int MAT_CELL = 12;                 // glyph cell size (px)
+  static const uint32_t MAT_FRAME_MS = 55;        // ~18 fps when awake
+  int  drops[64]; int nDrops = 0; bool matrixInit = false;   // per-column head y
 
   void drawCities() {                          // up to 4 rows, fixed left column (don't drift -> no clip)
     WorldClock::City cs[MAX_WORLD_CITIES];
@@ -43,33 +53,120 @@ class ClockApp : public App {
     puck::display().setTextColor(puck::display().color565(120, 140, 160), BLACK);
     puck::display().drawString(nm, puck::display().width() / 2, 14);
   }
+  void drawBackInto(lgfx::LovyanGFX* t) {        // composite the back chip so a full-screen blit doesn't flicker it
+    int o = layout::inset();
+    t->fillRoundRect(4 + o, 4 + o, 34, 24, 5, DARKGREY);
+    t->setTextDatum(middle_center); t->setFont(&fonts::Font0); t->setTextSize(2);
+    t->setTextColor(WHITE, DARKGREY); t->drawString("<", 21 + o, 16 + o);
+  }
+
+  // ---- Analog face: full-screen dial composed into the `face` canvas (drift applied to the center) ----
+  void drawAnalog(int h, int m, int s, int dx, int dy) {
+    lgfx::LovyanGFX* t = haveFace ? (lgfx::LovyanGFX*)&face : (lgfx::LovyanGFX*)&puck::display();
+    int w = t->width(), ht = t->height();
+    t->fillScreen(BLACK);
+    int cx = w / 2 + dx, cy = ht / 2 + 12 + dy, R = (w < ht ? w : ht) / 2 - 12;
+    for (int i = 0; i < 12; i++) {                       // hour ticks (long every 3rd)
+      float a = i * 30 * DEG_TO_RAD; bool major = (i % 3 == 0);
+      int r0 = R - (major ? 12 : 6);
+      t->drawWedgeLine(cx + (int)(sinf(a) * r0), cy - (int)(cosf(a) * r0),
+                       cx + (int)(sinf(a) * R),  cy - (int)(cosf(a) * R),
+                       major ? 2.0f : 1.0f, major ? 2.0f : 1.0f, major ? WHITE : DARKGREY);
+    }
+    float ha = ((h % 12) + m / 60.0f) * 30 * DEG_TO_RAD;
+    float ma = (m + s / 60.0f) * 6 * DEG_TO_RAD;
+    float sa = s * 6 * DEG_TO_RAD;
+    t->drawWedgeLine(cx, cy, cx + (int)(sinf(ha) * R * 0.50f), cy - (int)(cosf(ha) * R * 0.50f), 4.0f, 1.5f, CYAN);
+    t->drawWedgeLine(cx, cy, cx + (int)(sinf(ma) * R * 0.78f), cy - (int)(cosf(ma) * R * 0.78f), 3.0f, 1.0f, WHITE);
+    t->drawWedgeLine(cx, cy, cx + (int)(sinf(sa) * R * 0.88f), cy - (int)(cosf(sa) * R * 0.88f), 1.5f, 1.0f, RED);
+    t->fillSmoothCircle(cx, cy, 4, WHITE);
+    String nm = Settings::displayName();
+    if (nm.length()) { t->setFont(&fonts::Font0); t->setTextSize(2); t->setTextDatum(top_center);
+                       t->setTextColor(t->color565(120, 140, 160), BLACK); t->drawString(nm, w / 2, 6); }
+    drawBackInto(t);
+    if (haveFace) face.pushSprite(0, 0);
+  }
+
+  // ---- Matrix face: falling-glyph rain + legible time; animates ~18fps, throttled when idle-dimmed ----
+  void drawMatrix(int h, int m, int s, bool dimmed) {
+    lgfx::LovyanGFX* t = haveFace ? (lgfx::LovyanGFX*)&face : (lgfx::LovyanGFX*)&puck::display();
+    int w = t->width(), ht = t->height();
+    if (!matrixInit) {
+      nDrops = w / MAT_CELL; if (nDrops > 64) nDrops = 64;
+      for (int i = 0; i < nDrops; i++) drops[i] = (int)(esp_random() % ht);
+      matrixInit = true;
+    }
+    t->fillScreen(BLACK);
+    t->setFont(&fonts::Font0); t->setTextSize(1); t->setTextDatum(top_left);
+    for (int i = 0; i < nDrops; i++) {
+      int x = i * MAT_CELL;
+      for (int k = 0; k < 7; k++) {                      // trail: bright head -> fading green
+        int y = drops[i] - k * MAT_CELL; if (y < 0 || y >= ht) continue;
+        int row = y / MAT_CELL; char c = 33 + ((i * 31 + row * 7) % 90);   // stable per-cell glyph
+        int gg = 255 - k * 36; if (gg < 40) gg = 40;
+        t->setTextColor(k == 0 ? WHITE : t->color565(0, gg, 40));
+        t->drawChar(c, x, y);
+      }
+      if (!dimmed) { drops[i] += MAT_CELL; if (drops[i] - 7 * MAT_CELL > ht) drops[i] = (int)(esp_random() % MAT_CELL); }
+    }
+    char buf[8];                                          // HH:MM over a dark backing, drift not applied (centered)
+    if (h12) { int hr = h % 12; if (hr == 0) hr = 12; snprintf(buf, sizeof buf, "%d:%02d", hr, m); }
+    else       snprintf(buf, sizeof buf, "%02d:%02d", h, m);
+    t->setTextDatum(middle_center); t->setFont(&fonts::Font7); t->setTextSize(1);
+    int tw = t->textWidth(buf) + 20;
+    t->fillRect(w / 2 - tw / 2, ht / 2 - 30, tw, 60, BLACK);
+    t->setTextColor(GREEN); t->drawString(buf, w / 2, ht / 2);
+    drawBackInto(t);
+    if (haveFace) face.pushSprite(0, 0);
+  }
+
 public:
-  ClockApp() : App("Clock"), band(&puck::display()) {}
+  ClockApp() : App("Clock"), band(&puck::display()), face(&puck::display()) {}
   bool dimsWhenIdle() const override { return true; }   // the Clock is the idle/screensaver face -> it auto-dims
   void onEnter() override {
     puck::display().fillScreen(BLACK);
     h12 = Settings::clock12h();                 // cache the format (changes only across a reboot)
-    drawName();                                 // sits above the time band (y<44); persists across ticks
-    lastSec = -1; lastMin = -1; lastPhase = 0xFFFFFFFF;
+    faceIdx = Settings::clockFace(); if (faceIdx < 0 || faceIdx > 2) faceIdx = 0;
+    if (faceIdx == 0) drawName();               // Digital: name sits above the band (y<44); persists across ticks
+    lastSec = -1; lastMin = -1; lastPhase = 0xFFFFFFFF; lastFrame = 0; matrixInit = false;
     WorldClock::reload();                       // pick up any cities chosen in Settings
-    if (!haveBand) {                            // allocate the band sprite once (PSRAM = ample on CoreS3)
-      band.setColorDepth(16);
-      band.setPsram(true);
+    if (!haveBand) {                            // Digital band sprite (PSRAM = ample on CoreS3)
+      band.setColorDepth(16); band.setPsram(true);
       haveBand = (band.createSprite(puck::display().width(), BAND_H) != nullptr);
+    }
+    if (!haveFace) {                            // full-screen sprite for the Analog/Matrix faces
+      face.setColorDepth(16); face.setPsram(true);
+      haveFace = (face.createSprite(puck::display().width(), puck::display().height()) != nullptr);
     }
   }
   void loop() override {
     int h, m, s; ClockService::getTime(h, m, s);
+    if (gTap.pressed) {                          // tap the body cycles the face (main.cpp already consumed the back chip)
+      faceIdx = (faceIdx + 1) % 3; Settings::setClockFace(faceIdx);
+      puck::display().fillScreen(BLACK);
+      lastSec = -1; lastMin = -1; lastPhase = 0xFFFFFFFF; lastFrame = 0; matrixInit = false;
+      if (faceIdx == 0) drawName();
+      gTap.pressed = false;
+    }
     uint32_t phase = millis() / CLOCK_DRIFT_PERIOD_MS;
-    if (s == lastSec && phase == lastPhase) return;     // nothing to redraw
-    bool moved     = (phase != lastPhase);              // drift step
-    bool minOrFull = moved || (m != lastMin) || lastSec < 0;
-    lastSec = s; lastPhase = phase;
-
     int w = puck::display().width(), cx = w / 2;
     int dx = (int)((phase * 7)  % (2 * CLOCK_DRIFT_MAX_PX + 1)) - CLOCK_DRIFT_MAX_PX;
     int dy = (int)((phase * 13) % (2 * CLOCK_DRIFT_MAX_PX + 1)) - CLOCK_DRIFT_MAX_PX;
-    char buf[16]; const char* ap = nullptr;
+
+    if (faceIdx == 2) {                          // Matrix: animate ~18fps (slowed to ~2.5fps when deep-idle-dimmed)
+      bool dimmed = Dim::dimmed();
+      if (millis() - lastFrame < (dimmed ? 400UL : MAT_FRAME_MS)) return;
+      lastFrame = millis(); drawMatrix(h, m, s, dimmed); return;
+    }
+
+    if (s == lastSec && phase == lastPhase) return;     // Digital/Analog: redraw on second or drift change
+    bool moved     = (phase != lastPhase);
+    bool minOrFull = moved || (m != lastMin) || lastSec < 0;
+    lastSec = s; lastPhase = phase;
+
+    if (faceIdx == 1) { drawAnalog(h, m, s, dx, dy); return; }   // Analog (full-face)
+
+    char buf[16]; const char* ap = nullptr;       // Digital (face 0): compose the band off-screen
     if (h12) { int hr = h % 12; if (hr == 0) hr = 12; ap = (h >= 12) ? "PM" : "AM";
                snprintf(buf, sizeof(buf), "%d:%02d:%02d", hr, m, s); }
     else     { snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s); }
@@ -725,6 +822,165 @@ public:
       else              puck::display().drawRoundRect(8, addY(), w - 16, 24, 5, WHITE);
     } else if (mode == DETAIL)  puck::display().drawRoundRect(8, addY(), w - 16, 24, 5, WHITE);
     else if (mode == RESULTS)   puck::display().drawRect(4, RES_TOP + focusIdx * RES_H, w - 8, RES_H, WHITE);
+  }
+};
+
+// ---------------- Spotify (Now Playing) ----------------
+// Display-first: reads the Spotify service's mtx-guarded cache (track/artist/album/progress) and decodes
+// the album-art JPEG here on the UI thread into a PSRAM sprite when it changes. The whole screen is
+// composed off-screen and blitted once -> flicker-free on the ~4s poll. Three touch buttons drive
+// prev / play-pause / next. The setup gate (no linked token) routes the user to Settings.
+class SpotifyApp : public App {
+  puck::Canvas scope{&puck::display()};        // full-screen compose buffer (PSRAM)
+  puck::Canvas art{&puck::display()};          // decoded album art (PSRAM)
+  bool haveScope = false, haveArt = false;
+  lgfx::LovyanGFX* g = &puck::display();
+  uint8_t* artBuf = nullptr;                    // scratch for copying the service's JPEG bytes out of the mtx
+  static const int ARTSZ = 116;
+  static const size_t ARTBUF_MAX = 96 * 1024;
+  uint32_t shownVer = 0xFFFFFFFF, shownArtVer = 0xFFFFFFFF;
+  bool artOk = false;                           // the current track's art decoded
+  bool dirty = true;
+  uint32_t lastDraw = 0;
+  int  progBase = 0, dur = 0; uint32_t progAt = 0; bool playing = false;  // progress interpolation
+  int  focusIdx = 1;                            // button-nav cursor: 0=prev 1=play 2=next
+
+  void beginScope() {
+    if (!haveScope) { scope.setColorDepth(16); scope.setPsram(true);
+      haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr); }
+    if (!haveArt) { art.setColorDepth(16); art.setPsram(true);
+      haveArt = (art.createSprite(ARTSZ, ARTSZ) != nullptr); }
+    if (!artBuf) artBuf = (uint8_t*)heap_caps_malloc(ARTBUF_MAX, MALLOC_CAP_SPIRAM);
+  }
+  void drawBackInto(lgfx::LovyanGFX* t) {
+    int o = layout::inset();
+    t->fillRoundRect(4 + o, 4 + o, 34, 24, 5, DARKGREY);
+    t->setTextDatum(middle_center); t->setFont(&fonts::Font0); t->setTextSize(2);
+    t->setTextColor(WHITE, DARKGREY); t->drawString("<", 21 + o, 16 + o);
+  }
+  String fit(lgfx::LovyanGFX* t, const String& s, int maxw) {   // trim + ellipsis to fit the current font/size
+    if (!s.length() || t->textWidth(s) <= maxw) return s;
+    String r = s; while (r.length() > 1 && t->textWidth(r + "...") > maxw) r.remove(r.length() - 1);
+    return r + "...";
+  }
+  int ctlY() { return puck::display().height() - 24; }
+  int ctlX(int i) { return puck::display().width() / 2 + (i - 1) * 84; }
+  int ctlHit(int x, int y) { if (abs(y - ctlY()) > 24) return -1;
+    for (int i = 0; i < 3; i++) if (abs(x - ctlX(i)) <= 40) return i; return -1; }
+  void drawCtl(lgfx::LovyanGFX* t, int i, bool isPlaying, uint16_t col) {
+    int cx = ctlX(i), cy = ctlY();
+    if (i == 0) {                                 // prev: bar + two left triangles
+      t->fillRect(cx - 14, cy - 9, 3, 18, col);
+      t->fillTriangle(cx + 1, cy - 9, cx + 1, cy + 9, cx - 9, cy, col);
+      t->fillTriangle(cx + 12, cy - 9, cx + 12, cy + 9, cx + 2, cy, col);
+    } else if (i == 2) {                           // next: two right triangles + bar
+      t->fillTriangle(cx - 12, cy - 9, cx - 12, cy + 9, cx - 2, cy, col);
+      t->fillTriangle(cx - 1, cy - 9, cx - 1, cy + 9, cx + 9, cy, col);
+      t->fillRect(cx + 11, cy - 9, 3, 18, col);
+    } else if (isPlaying) {                         // pause: two bars
+      t->fillRect(cx - 9, cy - 11, 6, 22, col); t->fillRect(cx + 3, cy - 11, 6, 22, col);
+    } else {                                        // play: right triangle
+      t->fillTriangle(cx - 8, cy - 12, cx - 8, cy + 12, cx + 13, cy, col);
+    }
+  }
+  static void fmtTime(int ms, char* out, size_t n) {
+    if (ms < 0) ms = 0; int s = ms / 1000; snprintf(out, n, "%d:%02d", s / 60, s % 60);
+  }
+
+  void drawNow() {
+    g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();
+    int w = g->width(), h = g->height();
+    g->fillScreen(BLACK);
+    Spotify::Now n; bool has = Spotify::get(n);
+    if (!has) {
+      g->setTextDatum(middle_center); g->setFont(&fonts::Font0);
+      g->setTextSize(2); g->setTextColor(DARKGREY, BLACK); g->drawString("Nothing playing", w / 2, h / 2 - 8);
+      g->setTextSize(1); g->setTextColor(puck::display().color565(90, 100, 110), BLACK);
+      g->drawString("start a track in Spotify", w / 2, h / 2 + 16);
+      drawBackInto(g); if (haveScope) scope.pushSprite(0, 0); g = &puck::display(); return;
+    }
+    int ax = (w - ARTSZ) / 2, ay = 8;
+    if (artOk && haveArt) art.pushSprite(g, ax, ay);
+    else {                                          // placeholder: dark tile + a simple note glyph
+      g->fillRoundRect(ax, ay, ARTSZ, ARTSZ, 8, puck::display().color565(28, 30, 38));
+      int mx = ax + ARTSZ / 2, my = ay + ARTSZ / 2;
+      g->fillRect(mx - 8, my - 20, 3, 30, DARKGREY); g->fillRect(mx + 15, my - 26, 3, 30, DARKGREY);
+      g->fillRect(mx - 8, my - 26, 26, 6, DARKGREY);
+      g->fillCircle(mx - 12, my + 10, 6, DARKGREY); g->fillCircle(mx + 11, my + 4, 6, DARKGREY);
+    }
+    g->setTextDatum(top_center); g->setFont(&fonts::Font0);
+    g->setTextSize(2); g->setTextColor(WHITE, BLACK);   g->drawString(fit(g, n.track,  w - 16), w / 2, ay + ARTSZ + 8);
+    g->setTextSize(1); g->setTextColor(CYAN,  BLACK);   g->drawString(fit(g, n.artist, w - 16), w / 2, ay + ARTSZ + 30);
+    int cur = progBase + (playing ? (int)(millis() - progAt) : 0);
+    if (dur > 0 && cur > dur) cur = dur; if (cur < 0) cur = 0;
+    int by = h - 56, bx = 20, bw = w - 40;
+    g->drawRoundRect(bx, by, bw, 6, 3, DARKGREY);
+    if (dur > 0) g->fillRoundRect(bx, by, (int)((long)bw * cur / dur), 6, 3, GREEN);
+    char te[8], td[8]; fmtTime(cur, te, sizeof te); fmtTime(dur, td, sizeof td);
+    g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
+    g->setTextDatum(top_left);  g->drawString(te, bx, by + 10);
+    g->setTextDatum(top_right); g->drawString(td, bx + bw, by + 10);
+    for (int i = 0; i < 3; i++) drawCtl(g, i, n.playing, WHITE);
+    if (Spotify::noDevice()) {
+      g->setTextDatum(bottom_center); g->setFont(&fonts::Font0); g->setTextSize(1);
+      g->setTextColor(ORANGE, BLACK); g->drawString("no active device", w / 2, h - 2);
+    }
+    drawBackInto(g);
+    if (haveScope) scope.pushSprite(0, 0);
+    g = &puck::display();
+  }
+
+public:
+  SpotifyApp() : App("Spotify") {}
+  bool needsNet() const override { return true; }
+  bool needsSetup() const override { return !Spotify::configured(); }   // not linked -> route to Settings
+  const char* setupHint() const override { return "Link Spotify (Settings)"; }
+
+  void onEnter() override {
+    beginScope();
+    shownVer = 0xFFFFFFFF; shownArtVer = 0xFFFFFFFF; artOk = false; dirty = true; lastDraw = 0; focusIdx = 1;
+    Spotify::setActive(true);
+    puck::display().fillScreen(BLACK);
+  }
+  void onExit() override { Spotify::setActive(false); }
+
+  void loop() override {
+    uint32_t av = Spotify::artVersion();          // decode new album art on the UI thread when it changes
+    if (av != shownArtVer) {
+      shownArtVer = av; artOk = false;
+      if (haveArt && artBuf) {
+        size_t nb = Spotify::artCopy(artBuf, ARTBUF_MAX);
+        if (nb) { Spotify::Now n; Spotify::get(n);
+          art.fillScreen(BLACK);
+          float sc = (n.imgW > 0) ? (float)ARTSZ / n.imgW : 0.4f;
+          artOk = art.drawJpg(artBuf, nb, 0, 0, ARTSZ, ARTSZ, 0, 0, sc, sc); }
+      }
+      dirty = true;
+    }
+    if (gTap.pressed) {                           // controls
+      int hit = ctlHit(gTap.x, gTap.y);
+      if (hit == 0) Spotify::prev(); else if (hit == 1) Spotify::playPause(); else if (hit == 2) Spotify::next();
+      if (hit >= 0) dirty = true;
+      gTap.pressed = false;
+    }
+    uint32_t ver = Spotify::version();            // re-sync the progress base on a data change
+    if (ver != shownVer) {
+      Spotify::Now n; Spotify::get(n);
+      progBase = n.progressMs; dur = n.durationMs; playing = n.playing; progAt = millis();
+      shownVer = ver; dirty = true;
+    }
+    if (dirty || (playing && millis() - lastDraw >= 1000)) { drawNow(); dirty = false; lastDraw = millis(); }
+  }
+
+  // ---- button nav (the 3 controls) ----
+  int focusCount() override { Spotify::Now n; return Spotify::get(n) ? 3 : 0; }
+  void focusMove(int d) override { int n = focusCount(); if (!n) return; focusIdx = (focusIdx + d + n) % n; dirty = true; }
+  void focusSelect() override {
+    if (focusIdx == 0) Spotify::prev(); else if (focusIdx == 1) Spotify::playPause(); else Spotify::next(); dirty = true;
+  }
+  void drawFocus() override {
+    Spotify::Now n; if (!Spotify::get(n)) return; if (focusIdx < 0 || focusIdx > 2) focusIdx = 1;
+    puck::display().drawRoundRect(ctlX(focusIdx) - 42, ctlY() - 22, 84, 44, 6, WHITE);
   }
 };
 

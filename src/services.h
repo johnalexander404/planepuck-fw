@@ -25,6 +25,8 @@ namespace Settings {
   void saveMqttPass(const String& pass);
   String finnhubKey();                // per-device Finnhub API key for Stocks (NVS; falls back to config FINNHUB_API_KEY)
   void saveFinnhubKey(const String& key);
+  String spotifyRefresh();            // per-device Spotify OAuth refresh token (NVS; "" = not linked)
+  void saveSpotifyRefresh(const String& token);
   String worldClockBlob();            // world-clock cities as JSON ("" if none)
   void saveWorldClockBlob(const String& json);
   String weatherCitiesBlob();         // weather cities as JSON ("" = use home location)
@@ -37,6 +39,8 @@ namespace Settings {
   void saveTempF(bool f);
   bool clock12h();                    // true = 12-hour clock (AM/PM), false = 24-hour (default)
   void saveClock12h(bool v);
+  int  clockFace();                   // watch face: 0=Digital, 1=Analog, 2=Matrix (default 0)
+  void setClockFace(int face);
   bool beta();                        // true = RC/test channel (picker shows RC builds); set via authenticated MQTT
   void saveBeta(bool v);
 }
@@ -219,6 +223,30 @@ namespace Stocks {
   uint32_t version();                      // bumps on any quote/search change (lazy redraw)
   void suspend();                          // pause during an OTA flash
   void resume();
+}
+
+// Spotify "Now Playing" (per-user OAuth via a hosted PKCE page; refresh token stored in NVS). A core-0
+// task refreshes the access token + polls currently-playing while the app is open, queues playback
+// controls, and caches the album-art JPEG bytes (the app decodes them). CA-pinned to SPOTIFY_CA_CERT.
+// Needs SPOTIFY_CLIENT_ID + a linked refresh token; no client secret anywhere.
+namespace Spotify {
+  struct Now {
+    String track, artist, album, imgUrl;
+    int  durationMs = 0, progressMs = 0;
+    int  imgW = 0;                  // pixel width of the chosen album-art image (for scale-to-fit decode)
+    bool playing = false, hasTrack = false;
+  };
+  void begin();
+  bool configured();               // SPOTIFY_CLIENT_ID set AND a refresh token stored
+  bool authed();                   // a refresh token exists and hasn't been rejected (else: re-link)
+  bool noDevice();                 // last control hit NO_ACTIVE_DEVICE (no Spotify Connect target)
+  bool get(Now& out);              // current-track snapshot; false if nothing playing
+  uint32_t version();              // bumps on track/state change (lazy redraw)
+  uint32_t artVersion();           // bumps when new album-art bytes are ready
+  size_t artCopy(uint8_t* dst, size_t cap);  // copy the album-art JPEG into dst (<=cap); 0 = none/too big
+  void setActive(bool on);         // app open -> poll; closed -> idle
+  void playPause(); void next(); void prev();  // queue a control (handled on the task)
+  void suspend(); void resume();   // pause during an OTA flash
 }
 
 namespace Broker {

@@ -98,14 +98,17 @@ jobs:
           ENROLL_TOKEN: ${{ secrets.ENROLL_TOKEN }}
           FW_HOST: ${{ secrets.FW_HOST }}
           MQTT_HOST: ${{ secrets.MQTT_HOST }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
         run: |
           [ -z "${OPENSKY_CLIENT_SECRET:-}" ] && echo "::warning::OPENSKY_CLIENT_SECRET not set — flight routes show 'route unknown'."
           [ -z "${FW_HOST:-}" ]   && echo "::warning::FW_HOST not set — OTA/enroll URLs blank (OTA off in this build)."
           [ -z "${MQTT_HOST:-}" ] && echo "::warning::MQTT_HOST not set — MQTT off in this build."
+          [ -z "${SPOTIFY_CLIENT_ID:-}" ] && echo "::warning::SPOTIFY_CLIENT_ID not set — the Spotify app shows 'Link Spotify'."
           cp src/config.h.example src/config.h
           sed -i "s|__FW_HOST__|${FW_HOST}|g; s|__MQTT_HOST__|${MQTT_HOST}|g" src/config.h
           sed -i "s|#define OPENSKY_CLIENT_ID .*|#define OPENSKY_CLIENT_ID \"${OPENSKY_CLIENT_ID}\"|" src/config.h
           sed -i "s|#define OPENSKY_CLIENT_SECRET .*|#define OPENSKY_CLIENT_SECRET \"${OPENSKY_CLIENT_SECRET}\"|" src/config.h
+          sed -i "s|#define SPOTIFY_CLIENT_ID .*|#define SPOTIFY_CLIENT_ID \"${SPOTIFY_CLIENT_ID}\"|" src/config.h
           if [ -n "${ENROLL_TOKEN:-}" ]; then
             sed -i "s|#define ENROLL_URL .*|#define ENROLL_URL \"https://${FW_HOST}/enroll\"|" src/config.h
             sed -i "s|#define ENROLL_TOKEN .*|#define ENROLL_TOKEN \"${ENROLL_TOKEN}\"|" src/config.h
@@ -201,13 +204,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish install page (final only)
+      - name: Publish install + Spotify-login pages (final only)
         if: env.RC != '1'
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DROPLET: ${{ secrets.DROPLET_HOST }}
+          FW_HOST: ${{ secrets.FW_HOST }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
         run: |
-          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then echo "::warning::no deploy secrets — skipping install page"; exit 0; fi
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then echo "::warning::no deploy secrets — skipping pages"; exit 0; fi
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519; chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${DROPLET##*@}" >> ~/.ssh/known_hosts 2>/dev/null
@@ -215,6 +220,17 @@ jobs:
           scp tools/webinstall/index.html "$DROPLET:$ROOT/index.html.tmp"
           ssh "$DROPLET" "chmod 644 $ROOT/index.html.tmp && mv $ROOT/index.html.tmp $ROOT/index.html"
           echo "published board-chooser install page"
+          # Spotify PKCE login page -> /spotify/ (fill the public client id + host; both non-secret)
+          if [ -n "${SPOTIFY_CLIENT_ID:-}" ]; then
+            sed "s|__SPOTIFY_CLIENT_ID__|${SPOTIFY_CLIENT_ID}|g; s|__FW_HOST__|${FW_HOST}|g" \
+              tools/spotifylogin/index.html > /tmp/spotify.html
+            ssh "$DROPLET" "mkdir -p $ROOT/spotify"
+            scp /tmp/spotify.html "$DROPLET:$ROOT/spotify/index.html.tmp"
+            ssh "$DROPLET" "chmod 644 $ROOT/spotify/index.html.tmp && mv $ROOT/spotify/index.html.tmp $ROOT/spotify/index.html"
+            echo "published Spotify login page -> /spotify/"
+          else
+            echo "::warning::SPOTIFY_CLIENT_ID not set — skipping the Spotify login page."
+          fi
 
       - name: Push RC to the 'test' kind (rc only)
         if: env.RC == '1'        # candidate auto-deploys to test-channel devices (each resolves its own board bin)

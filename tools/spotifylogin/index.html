@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Link Spotify · PlanePuck</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;
+       background:#f4f5f7;color:#1c1e21;line-height:1.5}
+  .wrap{max-width:480px;margin:0 auto;padding:28px 16px 48px}
+  .card{background:#fff;border:1px solid #e4e6eb;border-radius:16px;padding:26px;text-align:center}
+  .logo{width:60px;height:60px}
+  h1{font-size:24px;font-weight:600;margin:10px 0 2px}
+  .sub{color:#8a8d91;font-size:15px;margin:0 0 22px}
+  .btn{appearance:none;font:inherit;font-size:16px;font-weight:600;color:#fff;background:#1db954;
+       border:0;border-radius:24px;padding:13px 28px;cursor:pointer}
+  .btn:active{background:#169c46}
+  textarea{width:100%;font:13px ui-monospace,Menlo,monospace;border:1px solid #d7d9dd;border-radius:10px;
+           padding:10px;resize:none;margin:6px 0 12px;background:#f7f8fa;color:#1c1e21}
+  ol{text-align:left;color:#4b4f56;font-size:14px;margin:24px 0 0;padding-left:20px}
+  ol li{margin:8px 0}
+  code{background:#eef0f3;border-radius:5px;padding:1px 5px;font-size:13px}
+  .err{color:#d93025;font-size:14px;margin-top:14px}
+  .foot{text-align:center;color:#9a9da1;font-size:12px;margin-top:18px}
+  @media(prefers-color-scheme:dark){body{background:#0f1115;color:#e7e9ee}
+    .card{background:#1a1d23;border-color:#2a2e36}ol{color:#aeb2ba}code{background:#23262d}
+    textarea{background:#23262d;border-color:#33373f;color:#e7e9ee}}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+  <svg class="logo" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#1db954"/>
+    <path d="M6 9.5c4-1 8-.7 11 1M6.5 12.5c3.2-.8 6.4-.5 9 1M7 15.4c2.5-.6 5-.4 7 .8"
+          fill="none" stroke="#0b0f12" stroke-width="1.6" stroke-linecap="round"/></svg>
+  <h1>Link Spotify</h1>
+  <p class="sub" id="sub">Connect your Spotify account to PlanePuck</p>
+
+  <div id="start">
+    <button class="btn" id="go">Log in with Spotify</button>
+  </div>
+  <div id="result" style="display:none">
+    <textarea id="tok" readonly rows="3"></textarea>
+    <button class="btn" id="copy">Copy token</button>
+  </div>
+  <p class="err" id="err" style="display:none"></p>
+
+  <ol>
+    <li>Tap <b>Log in with Spotify</b> and approve access.</li>
+    <li><b>Copy</b> the token shown here.</li>
+    <li>On your puck, join the <code>PlanePuck-Setup</code> Wi-Fi, open <code>192.168.4.1</code>,
+        and paste it under <b>Spotify → Refresh token</b>, then Save.</li>
+  </ol>
+</div>
+<p class="foot">PlanePuck &middot; the token stays on your device — it is never sent to a server</p>
+</div>
+<script>
+  // Authorization Code + PKCE, fully client-side (no client secret). Spotify's token endpoint is
+  // CORS-enabled for PKCE, so the code->token exchange runs in the browser and the refresh token never
+  // leaves this page except when you paste it into your own device. CI fills the two placeholders below.
+  var CLIENT_ID = "__SPOTIFY_CLIENT_ID__";
+  var REDIRECT  = "https://__FW_HOST__/spotify/";
+  var SCOPES    = "user-read-currently-playing user-read-playback-state user-modify-playback-state";
+
+  function b64url(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf)))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+  function rnd(n){var a=new Uint8Array(n);crypto.getRandomValues(a);return b64url(a.buffer);}
+  async function sha256(s){return await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));}
+  function err(m){var e=document.getElementById('err');e.textContent=m;e.style.display='block';}
+
+  async function start(){
+    if(!CLIENT_ID || CLIENT_ID.indexOf('__')===0){err('This page has no Spotify client id configured yet.');return;}
+    var v=rnd(64); sessionStorage.setItem('pkce_v',v);
+    var ch=b64url(await sha256(v));
+    var u=new URL('https://accounts.spotify.com/authorize');
+    u.search=new URLSearchParams({response_type:'code',client_id:CLIENT_ID,redirect_uri:REDIRECT,
+      code_challenge_method:'S256',code_challenge:ch,scope:SCOPES}).toString();
+    location.href=u.toString();
+  }
+  async function exchange(code){
+    var v=sessionStorage.getItem('pkce_v');
+    if(!v){err('Session expired — tap Log in again.');return;}
+    var body=new URLSearchParams({grant_type:'authorization_code',code:code,redirect_uri:REDIRECT,
+      client_id:CLIENT_ID,code_verifier:v});
+    try{
+      var r=await fetch('https://accounts.spotify.com/api/token',
+        {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body});
+      var j=await r.json();
+      if(j.refresh_token){
+        document.getElementById('start').style.display='none';
+        document.getElementById('tok').value=j.refresh_token;
+        document.getElementById('sub').textContent='Linked! Copy your token below.';
+        document.getElementById('result').style.display='block';
+        history.replaceState({},'',REDIRECT);            // strip ?code from the URL
+      } else err('Token exchange failed: '+(j.error_description||j.error||'unknown'));
+    }catch(e){err('Network error during token exchange.');}
+  }
+  window.addEventListener('DOMContentLoaded',function(){
+    document.getElementById('go').onclick=start;
+    document.getElementById('copy').onclick=function(){
+      var t=document.getElementById('tok');t.select();
+      try{navigator.clipboard.writeText(t.value);}catch(e){document.execCommand('copy');}
+    };
+    var p=new URLSearchParams(location.search);
+    if(p.get('error')) err('Spotify returned: '+p.get('error'));
+    else if(p.get('code')) exchange(p.get('code'));
+  });
+</script>
+</body>
+</html>

@@ -157,6 +157,48 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 #define OPENSKY_CLIENT_ID      ""
 #define OPENSKY_CLIENT_SECRET  ""
 
+// ---- Spotify Now Playing (optional) ----
+// Shows the current track + album art with play/pause/skip. Register a free app at
+// https://developer.spotify.com/dashboard for a Client ID, and add the redirect URI
+// "https://__FW_HOST__/spotify/" to it (must match exactly). Linking is per-device with NO secret in
+// firmware: the user opens https://__FW_HOST__/spotify/ once, logs into Spotify (Authorization Code +
+// PKCE — no client secret anywhere), and pastes the resulting refresh token into the captive portal
+// (Settings -> Spotify). The device stores it in NVS and auto-refreshes (Spotify rotates the refresh
+// token; the service re-persists it). Blank SPOTIFY_CLIENT_ID = the Spotify app shows "Link Spotify".
+// CI fills SPOTIFY_CLIENT_ID from the SPOTIFY_CLIENT_ID repo secret (it's a PUBLIC PKCE client id).
+// NOTE: a Spotify app in dev mode is capped at 25 manually-added users; a larger fleet needs Spotify's
+// extended-quota review. Scopes: user-read-currently-playing user-read-playback-state user-modify-playback-state.
+#define SPOTIFY_CLIENT_ID  ""
+#define SPOTIFY_POLL_MS    4000     // currently-playing poll cadence while the app is open (ms)
+
+// Root CA for Spotify TLS — accounts.spotify.com, api.spotify.com, and the album-art CDN i.scdn.co all
+// chain to DigiCert Global Root G2 (separate from MQTT_CA_CERT, which is Let's Encrypt). Pinned with
+// setCACert (never setInsecure) since this carries the user's account token + playback control.
+static const char SPOTIFY_CA_CERT[] = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)EOF";
+
 // ---- Compass radar (heading-up rotation; needs a magnetometer) ----
 // The Flight radar rotates to heading-up only on units that actually have a
 // magnetometer (auto-detected at boot). Two correction knobs, both applied to the

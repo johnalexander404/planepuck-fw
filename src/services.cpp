@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <ctype.h>               // isdigit/isalnum for the weather geocoder query
 #include <esp_random.h>          // esp_random() — HW RNG for the self-enroll password
+#include <esp_heap_caps.h>       // heap_caps_malloc(MALLOC_CAP_SPIRAM) — album-art JPEG buffer in PSRAM
 #include "config.h"
 #include "services.h"
 #include "layout.h"
@@ -58,6 +59,8 @@ namespace Settings {
   void saveMqttPass(const String& p) { prefs.putString("mqttpass", p); }
   String finnhubKey() { String k = prefs.getString("fhkey", ""); return k.length() ? k : String(FINNHUB_API_KEY); }
   void saveFinnhubKey(const String& k) { prefs.putString("fhkey", k); }
+  String spotifyRefresh() { return prefs.getString("sprt", ""); }   // Spotify OAuth refresh token (rotated by the service)
+  void saveSpotifyRefresh(const String& t) { prefs.putString("sprt", t); }
   String worldClockBlob() { return prefs.getString("wclock", ""); }
   void saveWorldClockBlob(const String& j) { prefs.putString("wclock", j); }
   String weatherCitiesBlob() { return prefs.getString("wxcity", ""); }
@@ -70,6 +73,8 @@ namespace Settings {
   void saveTempF(bool f) { prefs.putBool("tempf", f); }
   bool clock12h() { return prefs.getBool("clk12", false); }
   void saveClock12h(bool v) { prefs.putBool("clk12", v); }
+  int  clockFace() { return prefs.getInt("face", 0); }              // 0=Digital 1=Analog 2=Matrix
+  void setClockFace(int f) { prefs.putInt("face", f); }
   bool beta() { return prefs.getBool("beta", false); }              // RC channel flag; set via authenticated MQTT fleet/channel
   void saveBeta(bool v) { prefs.putBool("beta", v); }
 }
@@ -244,6 +249,10 @@ namespace Provision {
     h += F("<label>Finnhub API key (optional)</label>"
            "<input name=fhkey placeholder='unchanged if left blank'></div>");
 
+    h += sec("<path d='M9 18V5l10-2v13'/><circle cx='6' cy='18' r='3'/><circle cx='16' cy='16' r='3'/>", "Spotify");
+    h += F("<label>Refresh token (paste from the Spotify login page; blank = keep)</label>"
+           "<input name=sprt placeholder='unchanged if left blank'></div>");
+
     // MQTT password: with self-enroll (ENROLL_URL/ENROLL_TOKEN) the puck provisions its own, so this is
     // normally left blank — but always offer it as a MANUAL OVERRIDE (e.g. enrollment failed, or the
     // broker password drifted out of sync). Typed = save + use it (skips enroll); blank = keep current.
@@ -269,6 +278,8 @@ namespace Provision {
     if (mp.length()) Settings::saveMqttPass(mp);   // blank = keep current (don't wipe the secret)
     String fk = server.arg("fhkey");
     if (fk.length()) Settings::saveFinnhubKey(fk); // blank = keep current (Stocks app key)
+    String sp = server.arg("sprt");
+    if (sp.length()) Settings::saveSpotifyRefresh(sp); // blank = keep current (Spotify link token)
     Settings::saveDisplayName(server.arg("dname"));  // clock + friends name; pre-filled, so blank = cleared
     { String u = server.arg("unit"); if (u.length()) Settings::saveTempF(u == "f"); }      // temp units
     { String c = server.arg("clk");  if (c.length()) Settings::saveClock12h(c == "12"); }   // clock format
@@ -1694,6 +1705,216 @@ namespace Stocks {
   }
 }
 
+// ===================== Spotify (Now Playing; PKCE OAuth) =====================
+// Per-user OAuth, no secret in firmware: the device is linked once via the hosted PKCE page, which mints
+// a refresh token the user pastes into the captive portal (NVS). Here we exchange it for short-lived
+// access tokens (mirrors osEnsureToken) — Spotify ROTATES refresh tokens, so a rotated one is re-persisted;
+// a dead token (invalid_grant) is cleared so the app prompts a re-link. CA-pinned to SPOTIFY_CA_CERT
+// (DigiCert G2) — never setInsecure, since this carries the account token + playback control. A core-0
+// task refreshes + polls currently-playing while the app is open, queues play/pause/next/prev controls,
+// and caches the album-art JPEG bytes in PSRAM (the app decodes). UI reads via get()/version()/artCopy().
+namespace Spotify {
+  static SemaphoreHandle_t mtx   = nullptr;
+  static TaskHandle_t      taskH = nullptr;
+  static volatile uint32_t gVersion = 0, gArtVersion = 0;
+  static volatile bool     gSuspend = false, gActive = false;
+  static volatile bool     gAuthErr = false;     // refresh token rejected -> re-link
+  static volatile bool     gNoDevice = false;    // last control hit NO_ACTIVE_DEVICE
+  static volatile bool     gWantToggle = false, gWantNext = false, gWantPrev = false;
+
+  static Now      gNow;                           // current track (mtx-guarded)
+  static String   gRefresh = "";                 // OAuth refresh token (NVS; rotated)
+  static String   gAccess  = "";                 // cached access token
+  static uint32_t gAccessExp = 0;                // millis() when to refresh
+  static uint8_t* gArtBuf = nullptr;             // last album-art JPEG (PSRAM)
+  static size_t   gArtLen = 0;
+  static String   gArtUrl = "";                  // url gArtBuf holds
+  static String   gPendingArtUrl = "";           // url the task should fetch next
+
+  static void bump() { gVersion++; }
+  uint32_t version()    { return gVersion; }
+  uint32_t artVersion() { return gArtVersion; }
+  bool configured()     { return strlen(SPOTIFY_CLIENT_ID) > 0 && gRefresh.length() > 0; }
+  bool authed()         { return gRefresh.length() > 0 && !gAuthErr; }
+  bool noDevice()       { return gNoDevice; }
+  void suspend()        { gSuspend = true; }
+  void resume()         { gSuspend = false; }
+  void setActive(bool on) { gActive = on; if (on && taskH) xTaskNotifyGive(taskH); }
+  void playPause() { gWantToggle = true; if (taskH) xTaskNotifyGive(taskH); }
+  void next()      { gWantNext   = true; if (taskH) xTaskNotifyGive(taskH); }
+  void prev()      { gWantPrev   = true; if (taskH) xTaskNotifyGive(taskH); }
+
+  bool get(Now& out) {
+    xSemaphoreTake(mtx, portMAX_DELAY); out = gNow; bool ok = gNow.hasTrack; xSemaphoreGive(mtx); return ok;
+  }
+  // Copy the current album-art JPEG into the caller's buffer (<=cap). Returns bytes copied (0 = none/too
+  // big). Copying under the lock avoids racing the task freeing/replacing the buffer mid-decode.
+  size_t artCopy(uint8_t* dst, size_t cap) {
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    size_t n = (gArtBuf && gArtLen && gArtLen <= cap) ? gArtLen : 0;
+    if (n) memcpy(dst, gArtBuf, n);
+    xSemaphoreGive(mtx);
+    return n;
+  }
+
+  static String urlenc(const String& s) {
+    String o; for (size_t i = 0; i < s.length(); i++) { char c = s[i];
+      if (isalnum((unsigned char)c) || c == '.' || c == '-' || c == '_' || c == '~') o += c;
+      else { char b[4]; snprintf(b, sizeof b, "%%%02X", (unsigned char)c); o += b; } }
+    return o;
+  }
+
+  // Exchange the refresh token for an access token (PKCE public client — no secret). Persists a rotated
+  // refresh token; clears a dead one (invalid_grant) so the app shows "re-link".
+  static bool ensureToken() {
+    if (gAccess.length() && (int32_t)(gAccessExp - millis()) > 0) return true;
+    if (!configured()) return false;
+    WiFiClientSecure tls; tls.setCACert(SPOTIFY_CA_CERT); tls.setHandshakeTimeout(12);
+    HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(10000);
+    if (!http.begin(tls, "https://accounts.spotify.com/api/token")) return false;
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    String body = String("grant_type=refresh_token&refresh_token=") + urlenc(gRefresh)
+                + "&client_id=" + SPOTIFY_CLIENT_ID;
+    int code = http.POST(body); String resp = http.getString(); http.end();
+    bool ok = false;
+    if (code == 200) {
+      JsonDocument doc;
+      if (!deserializeJson(doc, resp)) {
+        gAccess = String((const char*)(doc["access_token"] | ""));
+        long exp = doc["expires_in"] | 0;
+        gAccessExp = millis() + (uint32_t)(exp > 120 ? exp - 60 : 60) * 1000UL;   // refresh ~1 min early
+        const char* nrt = doc["refresh_token"] | "";                              // ROTATION: persist a new one
+        if (nrt[0] && gRefresh != nrt) { gRefresh = nrt; Settings::saveSpotifyRefresh(gRefresh); }
+        gAuthErr = false; ok = gAccess.length() > 0;
+      }
+    } else if (code == 400 || code == 401) {
+      JsonDocument ed; String err;
+      if (!deserializeJson(ed, resp)) err = String((const char*)(ed["error"] | ""));
+      if (err == "invalid_grant") {                          // token revoked/expired -> drop + prompt re-link
+        gAuthErr = true; gRefresh = ""; gAccess = ""; Settings::saveSpotifyRefresh("");
+      }
+    }
+    log_e("[spotify] token http=%d ok=%d", code, ok);
+    return ok;
+  }
+
+  static void fetchArt(const String& url) {
+    WiFiClientSecure tls; tls.setCACert(SPOTIFY_CA_CERT); tls.setHandshakeTimeout(12);
+    HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(12000);
+    if (!http.begin(tls, url)) return;
+    int code = http.GET();
+    int len = http.getSize();
+    if (code != 200 || len <= 0 || len > 96 * 1024) { http.end(); return; }   // cap (~300px art is ~15-40KB)
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!buf) { http.end(); return; }
+    WiFiClient* st = http.getStreamPtr(); int got = 0; uint32_t t0 = millis();
+    while (got < len && (http.connected() || st->available()) && millis() - t0 < 12000) {
+      int av = st->available();
+      if (av > 0) got += st->readBytes(buf + got, min(av, len - got));
+      else vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    http.end();
+    if (got != len) { heap_caps_free(buf); return; }
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    if (gArtBuf) heap_caps_free(gArtBuf);
+    gArtBuf = buf; gArtLen = len; gArtUrl = url;
+    xSemaphoreGive(mtx);
+    gArtVersion++;
+  }
+
+  static void fetchNowPlaying() {
+    WiFiClientSecure tls; tls.setCACert(SPOTIFY_CA_CERT); tls.setHandshakeTimeout(12);
+    HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(10000);
+    if (!http.begin(tls, "https://api.spotify.com/v1/me/player/currently-playing")) return;
+    http.addHeader("Authorization", "Bearer " + gAccess);
+    int code = http.GET();
+    if (code == 204) {                                       // nothing playing
+      http.end();
+      xSemaphoreTake(mtx, portMAX_DELAY); bool was = gNow.hasTrack; gNow = Now(); xSemaphoreGive(mtx);
+      if (was) bump(); return;
+    }
+    if (code != 200) { if (code == 401) gAccess = ""; http.end(); return; }   // 401 -> refresh next loop
+    String body = http.getString(); http.end();
+    JsonDocument filter;
+    filter["item"]["name"] = true;
+    filter["item"]["artists"][0]["name"] = true;
+    filter["item"]["album"]["name"] = true;
+    filter["item"]["album"]["images"][0]["url"]   = true;
+    filter["item"]["album"]["images"][0]["width"] = true;
+    filter["item"]["duration_ms"] = true;
+    filter["progress_ms"] = true;
+    filter["is_playing"]  = true;
+    JsonDocument d;
+    if (deserializeJson(d, body, DeserializationOption::Filter(filter))) return;
+    if (d["item"].isNull()) return;                          // an ad / no item
+    Now n; n.hasTrack = true;
+    n.track = String((const char*)(d["item"]["name"] | ""));
+    for (JsonVariant a : d["item"]["artists"].as<JsonArray>()) {
+      String nm = String((const char*)(a["name"] | "")); if (!nm.length()) continue;
+      if (n.artist.length()) n.artist += ", "; n.artist += nm; if (n.artist.length() > 48) break;
+    }
+    n.album      = String((const char*)(d["item"]["album"]["name"] | ""));
+    n.durationMs = d["item"]["duration_ms"] | 0;
+    n.progressMs = d["progress_ms"] | 0;
+    n.playing    = d["is_playing"] | false;
+    int bestDiff = 1 << 30;                                  // pick the image nearest ~300px
+    for (JsonVariant im : d["item"]["album"]["images"].as<JsonArray>()) {
+      const char* u = im["url"] | ""; if (!u[0]) continue;
+      int w = im["width"] | 0, diff = abs(w - 300);
+      if (!n.imgUrl.length() || diff < bestDiff) { bestDiff = diff; n.imgUrl = u; n.imgW = w; }
+    }
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    gNow = n;
+    if (n.imgUrl.length() && n.imgUrl != gArtUrl) gPendingArtUrl = n.imgUrl;   // fetch new art
+    xSemaphoreGive(mtx);
+    bump();
+  }
+
+  static void doControl() {
+    bool toggle = gWantToggle, nxt = gWantNext, prv = gWantPrev;
+    gWantToggle = gWantNext = gWantPrev = false;
+    if (!(toggle || nxt || prv)) return;
+    if (!ensureToken()) return;
+    bool playing; xSemaphoreTake(mtx, portMAX_DELAY); playing = gNow.playing; xSemaphoreGive(mtx);
+    bool put; String path;
+    if (toggle)   { put = true;  path = playing ? "/v1/me/player/pause" : "/v1/me/player/play"; }
+    else if (nxt) { put = false; path = "/v1/me/player/next"; }
+    else          { put = false; path = "/v1/me/player/previous"; }
+    WiFiClientSecure tls; tls.setCACert(SPOTIFY_CA_CERT); tls.setHandshakeTimeout(12);
+    HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(10000);
+    if (!http.begin(tls, String("https://api.spotify.com") + path)) return;
+    http.addHeader("Authorization", "Bearer " + gAccess);
+    http.addHeader("Content-Length", "0");
+    int code = put ? http.PUT("") : http.POST("");
+    http.end();
+    gNoDevice = (code == 404);                               // no active Spotify Connect device
+    log_e("[spotify] ctl %s http=%d", path.c_str(), code);
+    vTaskDelay(pdMS_TO_TICKS(350)); fetchNowPlaying();        // reflect the new state promptly
+  }
+
+  static void task(void*) {
+    for (;;) {
+      if (gSuspend || !configured() || !Net::online()) { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)); continue; }
+      if (!gActive && !(gWantToggle || gWantNext || gWantPrev)) { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(60000)); continue; }
+      if (!ensureToken()) { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000)); continue; }
+      doControl();
+      if (gActive) {
+        fetchNowPlaying();
+        String pend; xSemaphoreTake(mtx, portMAX_DELAY); pend = gPendingArtUrl; gPendingArtUrl = ""; xSemaphoreGive(mtx);
+        if (pend.length()) fetchArt(pend);
+      }
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(gActive ? SPOTIFY_POLL_MS : 60000));
+    }
+  }
+
+  void begin() {
+    if (taskH) return;
+    mtx = xSemaphoreCreateMutex();
+    gRefresh = Settings::spotifyRefresh();                  // linked token (captive portal); "" = not linked
+    xTaskCreatePinnedToCore(task, "spotify", 16384, nullptr, 1, &taskH, 0);
+  }
+}
+
 // ===================== Broker (MQTT) =====================
 namespace Broker {
 #if MQTT_TLS
@@ -2220,8 +2441,8 @@ namespace Ota {
     gVerReady = true; bump();   // gBeta is owned by onChannel()/begin() (MQTT marker) — don't write it here
   }
 
-  static void suspendNet() { Weather::suspend(); Flight::suspend(); Broker::suspend(); }
-  static void resumeNet()  { Broker::resume();  Flight::resume();  Weather::resume(); }
+  static void suspendNet() { Weather::suspend(); Flight::suspend(); Stocks::suspend(); Spotify::suspend(); Broker::suspend(); }
+  static void resumeNet()  { Broker::resume();  Stocks::resume(); Spotify::resume(); Flight::resume();  Weather::resume(); }
 
   // Download + flash the inactive slot. Runs only on the task, only after confirmUpdate().
   static void doFlash() {

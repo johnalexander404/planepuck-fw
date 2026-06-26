@@ -12,10 +12,11 @@ ClockApp clockApp;
 EmojiApp emojiApp;
 WeatherApp weatherApp;
 StocksApp stocksApp;
+SpotifyApp spotifyApp;
 FlightApp flightApp;
 SetupApp setupApp;
 FriendsApp friendsApp;
-App* apps[] = { &clockApp, &emojiApp, &weatherApp, &stocksApp, &flightApp, &setupApp, &friendsApp };
+App* apps[] = { &clockApp, &emojiApp, &weatherApp, &stocksApp, &spotifyApp, &flightApp, &setupApp, &friendsApp };
 const int APP_COUNT = sizeof(apps) / sizeof(apps[0]);
 
 // Launcher is a radial ring of circular chips. Geometry is computed in one
@@ -104,6 +105,13 @@ void drawAppIcon(const char* name, int cx, int cy, uint16_t chip) {
     puck::display().drawWedgeLine(cx + 1,  cy + 5, cx + 8, cy - 3,  1.6f, 1.6f, ink);
     puck::display().drawWedgeLine(cx + 8,  cy - 3, cx + 16, cy - 11, 1.6f, 1.6f, ink);
     puck::display().fillTriangle(cx + 16, cy - 12, cx + 16, cy - 3, cx + 7, cy - 12, ink);  // arrowhead
+  } else if (!strcmp(name, "Spotify")) {
+    // a two-note music glyph (beam + two stems + two note heads)
+    puck::display().fillRect(cx - 8, cy - 12, 2, 20, ink);                   // left stem
+    puck::display().fillRect(cx + 9, cy - 16, 2, 20, ink);                   // right stem
+    puck::display().fillRect(cx - 8, cy - 16, 19, 4, ink);                   // beam joining the stems
+    puck::display().fillSmoothCircle(cx - 10, cy + 8, 4, ink);               // left note head
+    puck::display().fillSmoothCircle(cx + 7,  cy + 4, 4, ink);               // right note head
   } else {
     char c[2] = { name[0], 0 };                                      // fallback: first letter
     puck::display().setTextDatum(middle_center);
@@ -451,6 +459,7 @@ void setup() {
   Weather::begin();           // start the background weather updater
   Flight::begin();            // start the background flight tracker
   Stocks::begin();            // start the background stock-quote updater
+  Spotify::begin();           // start the Spotify now-playing task (idles until the app opens + linked)
   Ota::begin();               // start the OTA updater (subscribes the push topic; idles until online)
 
   if (!Settings::haveWifi()) {   // first boot: go straight to on-device Wi-Fi setup
