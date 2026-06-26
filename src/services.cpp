@@ -285,7 +285,7 @@ namespace Provision {
     if (mp.length()) Settings::saveMqttPass(mp);   // blank = keep current (don't wipe the secret)
     String fk = server.arg("fhkey");
     if (fk.length()) Settings::saveFinnhubKey(fk); // blank = keep current (Stocks app key)
-    String sp = server.arg("sprt");
+    String sp = server.arg("sprt"); sp.trim();          // strip stray paste whitespace/newline
     if (sp.length()) Settings::saveSpotifyRefresh(sp); // blank = keep current (Spotify link token)
     Settings::saveDisplayName(server.arg("dname"));  // clock + friends name; pre-filled, so blank = cleared
     { String u = server.arg("unit"); if (u.length()) Settings::saveTempF(u == "f"); }      // temp units
@@ -1737,6 +1737,8 @@ namespace Spotify {
   static size_t   gArtLen = 0;
   static String   gArtUrl = "";                  // url gArtBuf holds
   static String   gPendingArtUrl = "";           // url the task should fetch next
+  static volatile bool gTokenOk = false;         // last access-token refresh succeeded (diagnostics)
+  static volatile int  gNowHttp = -1;            // last currently-playing HTTP status (diagnostics)
 
   static void bump() { gVersion++; }
   uint32_t version()    { return gVersion; }
@@ -1744,6 +1746,8 @@ namespace Spotify {
   bool configured()     { return strlen(SPOTIFY_CLIENT_ID) > 0 && gRefresh.length() > 0; }
   bool authed()         { return gRefresh.length() > 0 && !gAuthErr; }
   bool noDevice()       { return gNoDevice; }
+  bool tokenOk()        { return gTokenOk; }
+  int  nowHttp()        { return gNowHttp; }
   void suspend()        { gSuspend = true; }
   void resume()         { gSuspend = false; }
   void setActive(bool on) { gActive = on; if (on && taskH) xTaskNotifyGive(taskH); }
@@ -1801,6 +1805,7 @@ namespace Spotify {
         gAuthErr = true; gRefresh = ""; gAccess = ""; Settings::saveSpotifyRefresh("");
       }
     }
+    gTokenOk = ok;
     log_e("[spotify] token http=%d ok=%d", code, ok);
     return ok;
   }
@@ -1835,6 +1840,8 @@ namespace Spotify {
     if (!http.begin(tls, "https://api.spotify.com/v1/me/player/currently-playing")) return;
     http.addHeader("Authorization", "Bearer " + gAccess);
     int code = http.GET();
+    gNowHttp = code;
+    log_e("[spotify] now http=%d", code);
     if (code == 204) {                                       // nothing playing
       http.end();
       xSemaphoreTake(mtx, portMAX_DELAY); bool was = gNow.hasTrack; gNow = Now(); xSemaphoreGive(mtx);

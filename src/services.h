@@ -240,6 +240,8 @@ namespace Spotify {
   bool configured();               // SPOTIFY_CLIENT_ID set AND a refresh token stored
   bool authed();                   // a refresh token exists and hasn't been rejected (else: re-link)
   bool noDevice();                 // last control hit NO_ACTIVE_DEVICE (no Spotify Connect target)
+  bool tokenOk();                  // last access-token refresh succeeded (else: auth/network problem)
+  int  nowHttp();                  // last currently-playing HTTP status (-1 none, 200 ok, 204 idle, 403 scope)
   bool get(Now& out);              // current-track snapshot; false if nothing playing
   uint32_t version();              // bumps on track/state change (lazy redraw)
   uint32_t artVersion();           // bumps when new album-art bytes are ready

@@ -893,10 +893,18 @@ class SpotifyApp : public App {
     g->fillScreen(BLACK);
     Spotify::Now n; bool has = Spotify::get(n);
     if (!has) {
+      bool tok = Spotify::tokenOk(); int hc = Spotify::nowHttp();   // diagnose why there's no track
+      const char* head; const char* hint;
+      if (!tok)           { head = "Spotify sign-in"; hint = "failed - re-link in Settings"; }
+      else if (hc == 403) { head = "No access";       hint = "re-link + grant playback"; }
+      else if (hc <= 0)   { head = "Connecting...";   hint = "reaching Spotify"; }
+      else                { head = "Nothing playing"; hint = "play a track in your Spotify app"; }
       g->setTextDatum(middle_center); g->setFont(&fonts::Font0);
-      g->setTextSize(2); g->setTextColor(DARKGREY, BLACK); g->drawString("Nothing playing", w / 2, h / 2 - 8);
-      g->setTextSize(1); g->setTextColor(puck::display().color565(90, 100, 110), BLACK);
-      g->drawString("start a track in Spotify", w / 2, h / 2 + 16);
+      g->setTextSize(2); g->setTextColor(DARKGREY, BLACK); g->drawString(head, w / 2, h / 2 - 12);
+      g->setTextSize(1); g->setTextColor(puck::display().color565(120, 130, 140), BLACK);
+      g->drawString(hint, w / 2, h / 2 + 12);
+      char dbg[28]; snprintf(dbg, sizeof dbg, "tok=%d  http=%d", tok ? 1 : 0, hc);   // on-screen diagnostic
+      g->setTextColor(puck::display().color565(70, 78, 88), BLACK); g->drawString(dbg, w / 2, h / 2 + 32);
       drawBackInto(g); if (haveScope) scope.pushSprite(0, 0); g = &puck::display(); return;
     }
     int ax = (w - ARTSZ) / 2, ay = 8;
