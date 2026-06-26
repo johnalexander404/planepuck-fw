@@ -204,15 +204,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish install + Spotify-login pages (final only)
+      - name: Publish install page (final only)
         if: env.RC != '1'
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DROPLET: ${{ secrets.DROPLET_HOST }}
-          FW_HOST: ${{ secrets.FW_HOST }}
-          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
         run: |
-          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then echo "::warning::no deploy secrets — skipping pages"; exit 0; fi
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then echo "::warning::no deploy secrets — skipping install page"; exit 0; fi
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519; chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${DROPLET##*@}" >> ~/.ssh/known_hosts 2>/dev/null
@@ -220,17 +218,29 @@ jobs:
           scp tools/webinstall/index.html "$DROPLET:$ROOT/index.html.tmp"
           ssh "$DROPLET" "chmod 644 $ROOT/index.html.tmp && mv $ROOT/index.html.tmp $ROOT/index.html"
           echo "published board-chooser install page"
-          # Spotify PKCE login page -> /spotify/ (fill the public client id + host; both non-secret)
-          if [ -n "${SPOTIFY_CLIENT_ID:-}" ]; then
-            sed "s|__SPOTIFY_CLIENT_ID__|${SPOTIFY_CLIENT_ID}|g; s|__FW_HOST__|${FW_HOST}|g" \
-              tools/spotifylogin/index.html > /tmp/spotify.html
-            ssh "$DROPLET" "mkdir -p $ROOT/spotify"
-            scp /tmp/spotify.html "$DROPLET:$ROOT/spotify/index.html.tmp"
-            ssh "$DROPLET" "chmod 644 $ROOT/spotify/index.html.tmp && mv $ROOT/spotify/index.html.tmp $ROOT/spotify/index.html"
-            echo "published Spotify login page -> /spotify/"
-          else
-            echo "::warning::SPOTIFY_CLIENT_ID not set — skipping the Spotify login page."
-          fi
+
+      - name: Publish Spotify login page (rc + final)
+        # version-independent (just the public client id + host), so publish on candidates too -> the
+        # whole login flow is testable from an RC. Self-contained SSH setup (the install step above is
+        # skipped on an RC, so don't depend on its ~/.ssh).
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET: ${{ secrets.DROPLET_HOST }}
+          FW_HOST: ${{ secrets.FW_HOST }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        run: |
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${DROPLET:-}" ]; then echo "::warning::no deploy secrets — skipping Spotify page"; exit 0; fi
+          if [ -z "${SPOTIFY_CLIENT_ID:-}" ]; then echo "::warning::SPOTIFY_CLIENT_ID not set — skipping Spotify login page"; exit 0; fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519; chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${DROPLET##*@}" >> ~/.ssh/known_hosts 2>/dev/null
+          ROOT=/var/www/planepuck-fw
+          sed "s|__SPOTIFY_CLIENT_ID__|${SPOTIFY_CLIENT_ID}|g; s|__FW_HOST__|${FW_HOST}|g" \
+            tools/spotifylogin/index.html > /tmp/spotify.html
+          ssh "$DROPLET" "mkdir -p $ROOT/spotify"
+          scp /tmp/spotify.html "$DROPLET:$ROOT/spotify/index.html.tmp"
+          ssh "$DROPLET" "chmod 644 $ROOT/spotify/index.html.tmp && mv $ROOT/spotify/index.html.tmp $ROOT/spotify/index.html"
+          echo "published Spotify login page -> /spotify/"
 
       - name: Push RC to the 'test' kind (rc only)
         if: env.RC == '1'        # candidate auto-deploys to test-channel devices (each resolves its own board bin)
