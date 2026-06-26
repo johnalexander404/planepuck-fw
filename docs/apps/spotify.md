@@ -32,9 +32,12 @@ the focused one. On the single-button CoreS3 that's power-key **click = NEXT**, 
   (Authorization Code + **PKCE** — no secret anywhere), copy the refresh token, then on the puck **open
   the Settings app** (that starts the `PlanePuck-Setup` hotspot) and paste the token under **Spotify →
   Refresh token** at `192.168.4.1`. It's saved to NVS (`Settings::spotifyRefresh`, key `sprt`).
+- **A Spotify Premium account.** Spotify's Web API **Player** endpoints — both the now-playing *read*
+  (`/me/player/currently-playing`) and the *controls* — require Premium; a Free account gets **`403`**
+  even with all scopes granted. The app shows **"Needs Premium"** in that case.
 - **An active Spotify Connect device** for the controls — play/pause/skip target whatever's currently
   connected to Spotify. With nothing connected, controls return `404` and the app shows
-  **"no active device"** (Now-Playing display still works).
+  **"no active device"**.
 - **`config.h`:** `SPOTIFY_CLIENT_ID` (public PKCE id), `SPOTIFY_POLL_MS` (poll cadence while open),
   `SPOTIFY_CA_CERT` (DigiCert Global Root G2 — pinned).
 

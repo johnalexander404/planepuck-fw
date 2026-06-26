@@ -1903,7 +1903,8 @@ namespace Spotify {
     http.end();
     gNoDevice = (code == 404);                               // no active Spotify Connect device
     log_e("[spotify] ctl %s http=%d", path.c_str(), code);
-    vTaskDelay(pdMS_TO_TICKS(350)); fetchNowPlaying();        // reflect the new state promptly
+    vTaskDelay(pdMS_TO_TICKS(350));   // let Spotify register the change; the task fetchNowPlaying() runs
+                                      // right after this returns (one fetch, not a back-to-back TLS pair)
   }
 
   static void task(void*) {

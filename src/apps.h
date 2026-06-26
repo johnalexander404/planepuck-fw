@@ -896,7 +896,7 @@ class SpotifyApp : public App {
       bool tok = Spotify::tokenOk(); int hc = Spotify::nowHttp();   // diagnose why there's no track
       const char* head; const char* hint;
       if (!tok)           { head = "Spotify sign-in"; hint = "failed - re-link in Settings"; }
-      else if (hc == 403) { head = "No access";       hint = "re-link + grant playback"; }
+      else if (hc == 403) { head = "Needs Premium";   hint = "Spotify's player API requires Premium"; }
       else if (hc <= 0)   { head = "Connecting...";   hint = "reaching Spotify"; }
       else                { head = "Nothing playing"; hint = "play a track in your Spotify app"; }
       g->setTextDatum(middle_center); g->setFont(&fonts::Font0);
