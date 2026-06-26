@@ -1779,7 +1779,7 @@ namespace Spotify {
   // refresh token; clears a dead one (invalid_grant) so the app shows "re-link".
   static bool ensureToken() {
     if (gAccess.length() && (int32_t)(gAccessExp - millis()) > 0) return true;
-    if (!configured()) return false;
+    if (!configured() || gAuthErr) return false;   // gAuthErr: token rejected -> wait for a re-link + restart
     WiFiClientSecure tls; tls.setCACert(SPOTIFY_CA_CERT); tls.setHandshakeTimeout(12);
     HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(10000);
     if (!http.begin(tls, "https://accounts.spotify.com/api/token")) return false;
@@ -1801,8 +1801,8 @@ namespace Spotify {
     } else if (code == 400 || code == 401) {
       JsonDocument ed; String err;
       if (!deserializeJson(ed, resp)) err = String((const char*)(ed["error"] | ""));
-      if (err == "invalid_grant") {                          // token revoked/expired -> drop + prompt re-link
-        gAuthErr = true; gRefresh = ""; gAccess = ""; Settings::saveSpotifyRefresh("");
+      if (err == "invalid_grant") {                          // token revoked/expired: flag for a re-link, but
+        gAuthErr = true; gAccess = "";                       // KEEP the saved token (never silently wipe NVS/setup)
       }
     }
     gTokenOk = ok;
@@ -1926,6 +1926,7 @@ namespace Spotify {
     if (taskH) return;
     mtx = xSemaphoreCreateMutex();
     gRefresh = Settings::spotifyRefresh();                  // linked token (captive portal); "" = not linked
+    log_e("[spotify] begin: client_id=%d refresh_len=%d", strlen(SPOTIFY_CLIENT_ID) > 0 ? 1 : 0, gRefresh.length());
     xTaskCreatePinnedToCore(task, "spotify", 16384, nullptr, 1, &taskH, 0);
   }
 }
