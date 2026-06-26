@@ -188,12 +188,20 @@ void drawSetupNeeded() {
   puck::display().setTextColor(WHITE, BLACK);
   puck::display().drawString("Finish setup", cx, 40);
   bool wifiCase = !active || (active->needsNet() && !Settings::haveWifi());   // Wi-Fi missing takes priority
+  const char* url = (!wifiCase && active) ? active->setupUrl() : nullptr;     // e.g. the Spotify login page
   const char* l1 = wifiCase ? "Connect Wi-Fi"   : (active->setupHint() ? active->setupHint() : "Open Settings");
-  const char* l2 = wifiCase ? "to use this app" : "in Settings";
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
   puck::display().setTextColor(0xC618, BLACK);
-  puck::display().drawString(l1, cx, 84);
-  puck::display().drawString(l2, cx, 108);
+  if (url) {                                                                  // app with a login URL: show the steps
+    puck::display().drawString(l1, cx, 74);
+    puck::display().setTextSize(1);
+    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("1. log in at", cx, 100);
+    puck::display().setTextColor(GREEN, BLACK);    puck::display().drawString(url, cx, 116);
+    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("2. paste the token in Settings", cx, 132);
+  } else {
+    puck::display().drawString(l1, cx, 84);
+    puck::display().drawString(wifiCase ? "to use this app" : "in Settings", cx, 108);
+  }
   int bw = 184, bh = 46, bx = cx - bw / 2, by = 148;
   puck::display().fillRoundRect(bx, by, bw, bh, 9, CYAN);
   puck::display().setTextDatum(middle_center);

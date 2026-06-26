@@ -934,7 +934,8 @@ public:
   SpotifyApp() : App("Spotify") {}
   bool needsNet() const override { return true; }
   bool needsSetup() const override { return !Spotify::configured(); }   // not linked -> route to Settings
-  const char* setupHint() const override { return "Link Spotify (Settings)"; }
+  const char* setupHint() const override { return "Link Spotify"; }
+  const char* setupUrl()  const override { return SPOTIFY_LOGIN_URL; }  // shown on the setup prompt: where to log in
 
   void onEnter() override {
     beginScope();

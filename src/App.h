@@ -17,6 +17,7 @@ public:
   virtual bool needsNet() const { return false; }   // true = show a "finish setup" prompt until Wi-Fi is set
   virtual bool needsSetup() const { return false; }  // true = needs on-device config beyond Wi-Fi (e.g. an API key) before it runs
   virtual const char* setupHint() const { return nullptr; }  // first reason line on the setup prompt for the needsSetup case
+  virtual const char* setupUrl() const { return nullptr; }   // optional URL shown on the setup prompt (e.g. the Spotify login page)
   virtual bool dimsWhenIdle() const { return false; }  // true = let the screen auto-dim on this app (Clock only)
   virtual bool onBack() { return false; }              // back chip: true = handled in-app (e.g. radar->list); false = exit to launcher
 
