@@ -860,7 +860,7 @@ class SpotifyApp : public App {
   bool haveScope = false, haveArt = false;
   lgfx::LovyanGFX* g = &puck::display();
   uint8_t* artBuf = nullptr;                    // scratch for copying the service's JPEG bytes out of the mtx
-  static const int ARTSZ = 116;
+  int artSide = 0;                              // album-art sprite side (= max screen dim) -> fills the screen
   static const size_t ARTBUF_MAX = 96 * 1024;
   uint32_t shownVer = 0xFFFFFFFF, shownArtVer = 0xFFFFFFFF;
   bool artOk = false;                           // the current track's art decoded
@@ -872,8 +872,9 @@ class SpotifyApp : public App {
   void beginScope() {
     if (!haveScope) { scope.setColorDepth(16); scope.setPsram(true);
       haveScope = (scope.createSprite(puck::display().width(), puck::display().height()) != nullptr); }
+    if (!artSide) { int W = puck::display().width(), H = puck::display().height(); artSide = (W > H ? W : H); }
     if (!haveArt) { art.setColorDepth(16); art.setPsram(true);
-      haveArt = (art.createSprite(ARTSZ, ARTSZ) != nullptr); }
+      haveArt = (art.createSprite(artSide, artSide) != nullptr); }
     if (!artBuf) artBuf = (uint8_t*)heap_caps_malloc(ARTBUF_MAX, MALLOC_CAP_SPIRAM);
   }
   void drawBackInto(lgfx::LovyanGFX* t) {
@@ -887,7 +888,7 @@ class SpotifyApp : public App {
     String r = s; while (r.length() > 1 && t->textWidth(r + "...") > maxw) r.remove(r.length() - 1);
     return r + "...";
   }
-  int ctlY() { return puck::display().height() - 24; }
+  int ctlY() { return puck::display().height() - 18; }   // controls sit in the bottom overlay band
   int ctlX(int i) { return puck::display().width() / 2 + (i - 1) * 84; }
   int ctlHit(int x, int y) { if (abs(y - ctlY()) > 24) return -1;
     for (int i = 0; i < 3; i++) if (abs(x - ctlX(i)) <= 40) return i; return -1; }
@@ -934,31 +935,30 @@ class SpotifyApp : public App {
       g->drawString(dbg, w / 2, h - 4);
       drawBackInto(g); if (haveScope) scope.pushSprite(0, 0); g = &puck::display(); return;
     }
-    int ax = (w - ARTSZ) / 2, ay = 8;
-    if (artOk && haveArt) art.pushSprite(g, ax, ay);
-    else {                                          // placeholder: dark tile + a simple note glyph
-      g->fillRoundRect(ax, ay, ARTSZ, ARTSZ, 8, puck::display().color565(28, 30, 38));
-      int mx = ax + ARTSZ / 2, my = ay + ARTSZ / 2;
-      g->fillRect(mx - 8, my - 20, 3, 30, DARKGREY); g->fillRect(mx + 15, my - 26, 3, 30, DARKGREY);
-      g->fillRect(mx - 8, my - 26, 26, 6, DARKGREY);
-      g->fillCircle(mx - 12, my + 10, 6, DARKGREY); g->fillCircle(mx + 11, my + 4, 6, DARKGREY);
-    }
+    // full-bleed album art: cover-crop the square art over the whole screen
+    int offx = (w - artSide) / 2, offy = (h - artSide) / 2;
+    if (artOk && haveArt) art.pushSprite(g, offx, offy);
+    else { g->fillScreen(g->color565(18, 20, 24)); drawSpotifyMark(g, w / 2, h / 2 - 26, 30); }
+
+    // bottom overlay: a dark band carrying track / artist, a progress bar, and the controls
+    const int bandH = 88, by = h - bandH;
+    uint16_t bandbg = g->color565(8, 10, 12);
+    g->fillRect(0, by, w, bandH, bandbg);
+    g->drawFastHLine(0, by, w, g->color565(40, 44, 50));            // subtle top edge
     g->setTextDatum(top_center); g->setFont(&fonts::Font0);
-    g->setTextSize(2); g->setTextColor(WHITE, BLACK);   g->drawString(fit(g, n.track,  w - 16), w / 2, ay + ARTSZ + 8);
-    g->setTextSize(1); g->setTextColor(CYAN,  BLACK);   g->drawString(fit(g, n.artist, w - 16), w / 2, ay + ARTSZ + 30);
+    g->setTextSize(2); g->setTextColor(WHITE, bandbg);
+    g->drawString(fit(g, n.track, w - 16), w / 2, by + 8);
+    g->setTextSize(1); g->setTextColor(g->color565(150, 160, 170), bandbg);
+    g->drawString(fit(g, n.artist, w - 16), w / 2, by + 28);
     int cur = progBase + (playing ? (int)(millis() - progAt) : 0);
     if (dur > 0 && cur > dur) cur = dur; if (cur < 0) cur = 0;
-    int by = h - 56, bx = 20, bw = w - 40;
-    g->drawRoundRect(bx, by, bw, 6, 3, DARKGREY);
-    if (dur > 0) g->fillRoundRect(bx, by, (int)((long)bw * cur / dur), 6, 3, GREEN);
-    char te[8], td[8]; fmtTime(cur, te, sizeof te); fmtTime(dur, td, sizeof td);
-    g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
-    g->setTextDatum(top_left);  g->drawString(te, bx, by + 10);
-    g->setTextDatum(top_right); g->drawString(td, bx + bw, by + 10);
-    for (int i = 0; i < 3; i++) drawCtl(g, i, n.playing, WHITE);
+    int bx = 18, bw = w - 36, pby = by + 44;                        // progress bar
+    g->drawRoundRect(bx, pby, bw, 4, 2, g->color565(70, 76, 84));
+    if (dur > 0) g->fillRoundRect(bx, pby, (int)((long)bw * cur / dur), 4, 2, g->color565(30, 215, 96));
+    for (int i = 0; i < 3; i++) drawCtl(g, i, n.playing, WHITE);    // Prev / Play-Pause / Next
     if (Spotify::noDevice()) {
-      g->setTextDatum(bottom_center); g->setFont(&fonts::Font0); g->setTextSize(1);
-      g->setTextColor(ORANGE, BLACK); g->drawString("no active device", w / 2, h - 2);
+      g->setTextDatum(top_right); g->setTextSize(1); g->setTextColor(ORANGE, bandbg);
+      g->drawString("no device", w - 6, by + 4);
     }
     drawBackInto(g);
     if (haveScope) scope.pushSprite(0, 0);
@@ -988,8 +988,8 @@ public:
         size_t nb = Spotify::artCopy(artBuf, ARTBUF_MAX);
         if (nb) { Spotify::Now n; Spotify::get(n);
           art.fillScreen(BLACK);
-          float sc = (n.imgW > 0) ? (float)ARTSZ / n.imgW : 0.4f;
-          artOk = art.drawJpg(artBuf, nb, 0, 0, ARTSZ, ARTSZ, 0, 0, sc, sc); }
+          float sc = (n.imgW > 0) ? (float)artSide / n.imgW : 0.5f;  // cover the whole screen
+          artOk = art.drawJpg(artBuf, nb, 0, 0, artSide, artSide, 0, 0, sc, sc); }
       }
       dirty = true;
     }
