@@ -160,7 +160,9 @@ jobs:
           VERS=$(ssh "$DROPLET" "cd $DIR && ls firmware${S}-v*.bin 2>/dev/null" \
                  | sed -E "s@^firmware${S}-v([0-9]+)\.bin\$@\1@" | grep -E '^[0-9]+$' | sort -n)
           RELT=$(git tag --list 'fw-v*' | sed -nE 's/^fw-v([0-9]+)$/\1/p' | sort -n)
-          RELB=$(for v in $RELT; do echo "$VERS" | grep -qx "$v" && echo "$v"; done | sort -n)
+          # `; :` keeps the brace-group exit 0 so a board with NO released bins yet (a first-ever build,
+          # or an rc bin with no matching final tag) doesn't trip set -e/pipefail when every grep misses.
+          RELB=$( { for v in $RELT; do echo "$VERS" | grep -qx "$v" && echo "$v"; done; :; } | sort -n)
           VCSV=$(echo "$VERS" | paste -sd, -)
           RCSV=$(echo "$RELB" | paste -sd, -)
           LATEST=$(echo "$RELB" | tail -1)
@@ -189,6 +191,9 @@ jobs:
   # ---- once, after all boards: the (board-agnostic) install page + broadcast / RC push ----
   finalize:
     needs: [prepare, build]
+    # Run as long as the version was derived, even if a board (e.g. a stub) failed — so a green board's
+    # RC test-push / broadcast still fires instead of being silently skipped by one bad matrix leg.
+    if: ${{ always() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       N:  ${{ needs.prepare.outputs.n }}
@@ -224,7 +229,7 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
           # --quiet: no device codes/boards in the public log. 'test' resolves from broker channel markers.
           FLEET_HOST="$MQTT_HOST" FLEET_PORT=8883 python3 tools/fleet.py send test "$N" --force --quiet \
-            || echo "::warning::auto-push to 'test' failed (no test-channel devices online?) — RC still installable via fleet.py / picker"
+            || echo "::warning::auto-push to 'test' failed (no test-channel devices online, or an operator credential/ACL/broker error) — RC still installable via fleet.py / picker"
 
       - name: Broadcast recheck (final only)
         if: env.RC != '1'        # never broadcast a candidate
