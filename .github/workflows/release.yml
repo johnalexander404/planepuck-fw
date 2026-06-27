@@ -204,8 +204,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish install page (final only)
-        if: env.RC != '1'
+      - name: Publish install page (rc + final)
+        # The page is static + points to the per-board manifest.json (which references the final-only
+        # full-flash images), so publishing it on an RC just refreshes the page — it still installs the
+        # latest FINAL image. Decoupled from final so page fixes ship without a fleet bump.
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DROPLET: ${{ secrets.DROPLET_HOST }}
@@ -221,8 +223,8 @@ jobs:
 
       - name: Publish Spotify login page (rc + final)
         # version-independent (just the public client id + host), so publish on candidates too -> the
-        # whole login flow is testable from an RC. Self-contained SSH setup (the install step above is
-        # skipped on an RC, so don't depend on its ~/.ssh).
+        # whole login flow is testable from an RC. Self-contained SSH setup (doesn't depend on any
+        # other step's ~/.ssh).
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DROPLET: ${{ secrets.DROPLET_HOST }}

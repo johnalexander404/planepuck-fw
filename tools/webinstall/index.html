@@ -142,7 +142,7 @@
         if (r.done) break;
         if (r.value) {
           buf += new TextDecoder().decode(r.value);
-          var mm = buf.match(/PLANEPUCK board=([A-Za-z0-9_]+)/);
+          var mm = buf.match(/PLANEPUCK board=([A-Za-z0-9_]+)[\r\n]/);   // require line-end: don't match a chunk-split partial id
           if (mm) found = mm[1];
           if (buf.length > 8192) buf = buf.slice(-2048);
         }
