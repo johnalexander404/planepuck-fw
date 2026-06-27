@@ -25,7 +25,8 @@
           cursor:pointer;text-align:center;transition:border-color .15s,background .15s}
   .device:hover{border-color:#b9c0cc}
   .device.sel{border-color:#2d7ff9;background:#eef5ff}
-  .device svg{width:78px;height:78px}
+  .device svg,.device .photo{width:84px;height:84px}
+  .device .photo{object-fit:contain;border-radius:9px;background:#fff;padding:3px}
   .device .nm{font-size:13.5px;font-weight:600;margin-top:7px}
   .device .dim{font-size:11.5px;color:#8a8d91;margin-top:1px}
   #installWrap{display:none;margin-top:18px}
@@ -58,7 +59,10 @@
   <p class="pick">Or pick your device</p>
   <div class="devices">
     <div class="device" id="dev-m5cores3" onclick="selectBoard('m5cores3')">
-      <svg viewBox="0 0 96 96" aria-hidden="true">
+      <img class="photo" alt="M5Stack CoreS3" loading="lazy"
+           src="https://static-cdn.m5stack.com/resource/docs/products/core/CoreS3/img-2f6b5728-af80-4934-854f-4771a7fe859e.webp"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+      <svg viewBox="0 0 96 96" aria-hidden="true" style="display:none"><!-- fallback if the photo can't load -->
         <rect x="15" y="9" width="66" height="78" rx="11" fill="#3a3f4a"/>
         <rect x="22" y="17" width="52" height="42" rx="4" fill="#2d7ff9"/>
         <circle cx="48" cy="73" r="5.5" fill="#11141a"/>
@@ -67,7 +71,10 @@
       <div class="dim">square screen</div>
     </div>
     <div class="device" id="dev-waveshare_1_85c_box" onclick="selectBoard('waveshare_1_85c_box')">
-      <svg viewBox="0 0 96 96" aria-hidden="true">
+      <img class="photo" alt="Waveshare 1.85-inch round" loading="lazy"
+           src="https://www.waveshare.com/img/devkit/ESP32-S3-Touch-LCD-1.85/ESP32-S3-Touch-LCD-1.85-2_220.jpg"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+      <svg viewBox="0 0 96 96" aria-hidden="true" style="display:none"><!-- fallback if the photo can't load -->
         <circle cx="48" cy="48" r="39" fill="#3a3f4a"/>
         <circle cx="48" cy="48" r="30" fill="#2d7ff9"/>
       </svg>
