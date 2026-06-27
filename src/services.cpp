@@ -57,6 +57,10 @@ namespace Settings {
   void saveEmojiTarget(const String& t) { prefs.putString("emotgt", t); }
   String mqttPass() { String p = prefs.getString("mqttpass", ""); return p.length() ? p : String(MQTT_PASS); }
   void saveMqttPass(const String& p) { prefs.putString("mqttpass", p); }
+  // A portal-typed MQTT password is device-side only; this flag tells the connect task to register it
+  // with the broker (enroll endpoint) once Wi-Fi is up, so both ends match without a manual step.
+  bool mqttSyncPending() { return prefs.getBool("mqttsync", false); }
+  void setMqttSyncPending(bool v) { prefs.putBool("mqttsync", v); }
   String finnhubKey() { String k = prefs.getString("fhkey", ""); return k.length() ? k : String(FINNHUB_API_KEY); }
   void saveFinnhubKey(const String& k) { prefs.putString("fhkey", k); }
   String spotifyRefresh() { return prefs.getString("sprt", ""); }   // Spotify OAuth refresh token (rotated by the service)
@@ -264,7 +268,7 @@ namespace Provision {
     // normally left blank — but always offer it as a MANUAL OVERRIDE (e.g. enrollment failed, or the
     // broker password drifted out of sync). Typed = save + use it (skips enroll); blank = keep current.
     h += sec("<path d='M5 5h14v10H9l-4 3z'/>", "Friends");
-    h += F("<label>MQTT password (optional; overrides auto-enroll)</label>"
+    h += F("<label>MQTT password (optional; auto-registers with the broker)</label>"
            "<input name=mpass type=password placeholder='unchanged if left blank'></div>");
     h += F("<button type=submit>Save &amp; restart</button></form>"
            "<p class=foot>PlanePuck &middot; settings are saved on the device</p>"
@@ -282,7 +286,7 @@ namespace Provision {
     if (t.length()) Settings::saveTz(t);
     Settings::saveZip(server.arg("zip"));   // saved as-is; blank clears it (back to IP location)
     String mp = server.arg("mpass");
-    if (mp.length()) Settings::saveMqttPass(mp);   // blank = keep current (don't wipe the secret)
+    if (mp.length()) { Settings::saveMqttPass(mp); Settings::setMqttSyncPending(true); }   // blank = keep current (don't wipe); typed -> also register with the broker after reconnect
     String fk = server.arg("fhkey");
     if (fk.length()) Settings::saveFinnhubKey(fk); // blank = keep current (Stocks app key)
     String sp = server.arg("sprt"); sp.trim();          // strip stray paste whitespace/newline
@@ -1964,10 +1968,9 @@ namespace Broker {
   // with the droplet's enroll endpoint over HTTPS (CA-pinned to MQTT_CA_CERT, bearer = ENROLL_TOKEN),
   // and store it in NVS so every future connect just uses it. One success ends enrollment forever
   // (mqttPass() is non-empty afterwards). Runs on the connect task, off the UI thread.
-  static bool enrollOnce() {
-    char pw[33];                                   // 32 hex chars from the HW RNG (radio on -> true entropy)
-    for (int i = 0; i < 4; i++) snprintf(pw + i * 8, 9, "%08x", (unsigned)esp_random());
-    pw[32] = '\0';
+  // POST (code, pw) to the droplet's enroll endpoint -> it runs mosquitto_passwd + reloads, so the
+  // broker accepts this password for this device's username (= friend code). HTTPS, CA-pinned, bearer.
+  static bool enrollPost(const String& pw) {
     String code = Friends::myCode();
     String body = String("{\"code\":\"") + code + "\",\"pw\":\"" + pw + "\"}";
     WiFiClientSecure tls; tls.setCACert(MQTT_CA_CERT); tls.setHandshakeTimeout(8);   // NEVER setInsecure
@@ -1977,14 +1980,21 @@ namespace Broker {
     http.addHeader("Authorization", String("Bearer ") + ENROLL_TOKEN);
     int rc = http.POST(body);
     http.end();
-    if (rc == 200 || rc == 201) {
-      Settings::saveMqttPass(String(pw));
-      Serial.printf("[enroll] provisioned code=%s (rc=%d)\n", code.c_str(), rc);
-      return true;
-    }
+    if (rc == 200 || rc == 201) return true;
     log_e("[enroll] failed rc=%d", rc);             // USB-visible (Serial.printf only reaches UART0)
     Serial.printf("[enroll] failed code=%s rc=%d\n", code.c_str(), rc);
     return false;
+  }
+  // Zero-touch provisioning: a fresh puck has no MQTT password. Generate a random one, register it,
+  // and store it in NVS so every future connect just uses it. Runs on the connect task, off the UI thread.
+  static bool enrollOnce() {
+    char pw[33];                                   // 32 hex chars from the HW RNG (radio on -> true entropy)
+    for (int i = 0; i < 4; i++) snprintf(pw + i * 8, 9, "%08x", (unsigned)esp_random());
+    pw[32] = '\0';
+    if (!enrollPost(String(pw))) return false;
+    Settings::saveMqttPass(String(pw));
+    Serial.printf("[enroll] provisioned code=%s\n", Friends::myCode().c_str());
+    return true;
   }
 
   // The TLS connect can block for seconds; doing it on the UI loop froze touch. It now runs on
@@ -1995,6 +2005,13 @@ namespace Broker {
     for (;;) {
       if (enabled() && Net::online() && !gUp) {
         String pass = Settings::mqttPass();
+        // A password typed in the Settings portal is device-side only (the portal had no internet in
+        // SoftAP mode). Once we're online, register it with the broker via the enroll endpoint so both
+        // ends match — no manual mosquitto_passwd needed. Clears the flag on success.
+        if (Settings::mqttSyncPending() && pass.length() && enrollConfigured() && ClockService::synced()) {
+          if (enrollPost(pass)) { Settings::setMqttSyncPending(false);
+            Serial.printf("[enroll] registered portal password for %s\n", Friends::myCode().c_str()); }
+        }
         if (pass.length() == 0 && enrollConfigured()) {
           // Fresh puck, no password yet: self-provision one over HTTPS (TLS needs a synced clock).
           // On success NVS holds a password and the next cycle (3s) connects normally.
