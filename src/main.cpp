@@ -182,23 +182,23 @@ void drawSetupNeeded() {
   puck::display().setTextDatum(top_center);
   puck::display().setFont(&fonts::FreeSansBold12pt7b);
   puck::display().setTextColor(WHITE, BLACK);
-  puck::display().drawString("Finish setup", cx, 40);
+  puck::display().drawString("Finish setup", cx, 40 + layout::voff());
   bool wifiCase = !active || (active->needsNet() && !Settings::haveWifi());   // Wi-Fi missing takes priority
   const char* url = (!wifiCase && active) ? active->setupUrl() : nullptr;     // e.g. the Spotify login page
   const char* l1 = wifiCase ? "Connect Wi-Fi"   : (active->setupHint() ? active->setupHint() : "Open Settings");
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
   puck::display().setTextColor(0xC618, BLACK);
   if (url) {                                                                  // app with a login URL: show the steps
-    puck::display().drawString(l1, cx, 74);
+    puck::display().drawString(l1, cx, 74 + layout::voff());
     puck::display().setTextSize(1);
-    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("1. log in at", cx, 100);
-    puck::display().setTextColor(GREEN, BLACK);    puck::display().drawString(url, cx, 116);
-    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("2. paste the token in Settings", cx, 132);
+    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("1. log in at", cx, 100 + layout::voff());
+    puck::display().setTextColor(GREEN, BLACK);    puck::display().drawString(url, cx, 116 + layout::voff());
+    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("2. paste the token in Settings", cx, 132 + layout::voff());
   } else {
-    puck::display().drawString(l1, cx, 84);
-    puck::display().drawString(wifiCase ? "to use this app" : "in Settings", cx, 108);
+    puck::display().drawString(l1, cx, 84 + layout::voff());
+    puck::display().drawString(wifiCase ? "to use this app" : "in Settings", cx, 108 + layout::voff());
   }
-  int bw = 184, bh = 46, bx = cx - bw / 2, by = 148;
+  int bw = 184, bh = 46, bx = cx - bw / 2, by = 148 + layout::voff();
   puck::display().fillRoundRect(bx, by, bw, bh, 9, CYAN);
   puck::display().setTextDatum(middle_center);
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
@@ -210,7 +210,7 @@ void drawSetupNeeded() {
   puck::display().drawString(wifiCase ? "tap anywhere to set up Wi-Fi" : "tap anywhere to open Settings", cx, by + bh + 16);
 }
 
-static const int PING_BTN_Y = 198, PING_BTN_H = 32;   // Reply / Mute button row
+static const int PING_BTN_H = 32; static int PING_BTN_Y() { return 198 + layout::voff(); }   // Reply / Mute
 
 void drawPing(const String& emote, const String& name) {
   int w = puck::display().width(), h = puck::display().height();
@@ -224,17 +224,17 @@ void drawPing(const String& emote, const String& name) {
   int bw = w / 2 - 12;
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
   puck::display().setTextDatum(middle_center);
-  puck::display().drawRoundRect(8, PING_BTN_Y, bw, PING_BTN_H, 6, GREEN);
+  puck::display().drawRoundRect(8, PING_BTN_Y(), bw, PING_BTN_H, 6, GREEN);
   puck::display().setTextColor(GREEN, BLACK);
-  puck::display().drawString("Reply", 8 + bw / 2, PING_BTN_Y + PING_BTN_H / 2);
+  puck::display().drawString("Reply", 8 + bw / 2, PING_BTN_Y() + PING_BTN_H / 2);
   bool isMuted = Notify::muted();
   uint16_t mcol = isMuted ? CYAN : ORANGE;
-  puck::display().drawRoundRect(w / 2 + 4, PING_BTN_Y, bw, PING_BTN_H, 6, mcol);
+  puck::display().drawRoundRect(w / 2 + 4, PING_BTN_Y(), bw, PING_BTN_H, 6, mcol);
   puck::display().setTextColor(mcol, BLACK);
-  puck::display().drawString(isMuted ? "Unmute" : "Mute 1h", w / 2 + 4 + bw / 2, PING_BTN_Y + PING_BTN_H / 2);
+  puck::display().drawString(isMuted ? "Unmute" : "Mute 1h", w / 2 + 4 + bw / 2, PING_BTN_Y() + PING_BTN_H / 2);
 }
 
-static const int OTA_BTN_Y = 198, OTA_BTN_H = 32;   // Update / Later button row
+static const int OTA_BTN_H = 32; static int OTA_BTN_Y() { return 198 + layout::voff(); }   // Update / Later
 
 // Word-wrap centered text in the current font/size; returns lines drawn. Wraps on spaces so the
 // changelog never runs off the screen edges; marks the last line with "..." if it overflows maxLines.
@@ -269,10 +269,10 @@ void drawOtaConfirm(int ver, const String& notes) {
   puck::display().setFont(&fonts::FreeSansBold12pt7b); puck::display().setTextSize(1);
   puck::display().setTextColor(CYAN, BLACK);
   char t[28]; snprintf(t, sizeof(t), "Firmware v%d", ver);
-  puck::display().drawString(t, w / 2, 26);
+  puck::display().drawString(t, w / 2, 26 + layout::voff());
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
   puck::display().setTextColor(WHITE, BLACK);
-  puck::display().drawString("available", w / 2, 60);
+  puck::display().drawString("available", w / 2, 60 + layout::voff());
   // changelog: drop the redundant "release: firmware vN — " prefix release.sh adds, then wrap big
   String body = notes; body.trim();
   if (body.startsWith("release:")) {
@@ -285,17 +285,17 @@ void drawOtaConfirm(int ver, const String& notes) {
   if (body.length()) {
     puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
     puck::display().setTextColor(puck::display().color565(190, 190, 190), BLACK);
-    drawWrappedCentered(body, w / 2, 92, w - 16, 18, 5);
+    drawWrappedCentered(body, w / 2, 92 + layout::voff(), w - 16, 18, 5);
   }
   int bw = w / 2 - 12;
   puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
   puck::display().setTextDatum(middle_center);
-  puck::display().drawRoundRect(8, OTA_BTN_Y, bw, OTA_BTN_H, 6, GREEN);
+  puck::display().drawRoundRect(8, OTA_BTN_Y(), bw, OTA_BTN_H, 6, GREEN);
   puck::display().setTextColor(GREEN, BLACK);
-  puck::display().drawString("Update", 8 + bw / 2, OTA_BTN_Y + OTA_BTN_H / 2);
-  puck::display().drawRoundRect(w / 2 + 4, OTA_BTN_Y, bw, OTA_BTN_H, 6, ORANGE);
+  puck::display().drawString("Update", 8 + bw / 2, OTA_BTN_Y() + OTA_BTN_H / 2);
+  puck::display().drawRoundRect(w / 2 + 4, OTA_BTN_Y(), bw, OTA_BTN_H, 6, ORANGE);
   puck::display().setTextColor(ORANGE, BLACK);
-  puck::display().drawString("Later", w / 2 + 4 + bw / 2, OTA_BTN_Y + OTA_BTN_H / 2);
+  puck::display().drawString("Later", w / 2 + 4 + bw / 2, OTA_BTN_Y() + OTA_BTN_H / 2);
 }
 
 // full=true clears + draws the static frame once; subsequent ticks only repaint the % band + bar
@@ -447,6 +447,7 @@ void drawOtaFailed(const String& err) {
 
 void setup() {
   puck::begin();
+  log_e("PLANEPUCK board=%s", puck::boardId());   // web installer reads this over USB to pick the matching image
   disableCore0WDT();          // Weather/Flight/Broker tasks do blocking network I/O on core 0;
                               // that cooperative blocking must not trip the task watchdog.
 
@@ -476,6 +477,8 @@ void setup() {
 
 void loop() {
   puck::update();
+  static uint32_t lastBoardBeacon = 0;          // periodic board id so the web installer's serial probe can
+  if (millis() - lastBoardBeacon > 2000) { lastBoardBeacon = millis(); log_e("PLANEPUCK board=%s", puck::boardId()); }  // detect the board anytime (no reset needed)
 
   // one tap per frame
   gTap.pressed = false;
@@ -536,7 +539,7 @@ void loop() {
       if (ph == Ota::AVAILABLE) {                                   // confirm: Update | Later
         if (gTap.pressed) {
           int w = puck::display().width();
-          bool onRow = (gTap.y >= OTA_BTN_Y && gTap.y <= OTA_BTN_Y + OTA_BTN_H);
+          bool onRow = (gTap.y >= OTA_BTN_Y() && gTap.y <= OTA_BTN_Y() + OTA_BTN_H);
           if (onRow && gTap.x < w / 2) { Ota::confirmUpdate(); drawOtaSpiral(0, false); gOtaShownVer = Ota::version(); }
           else if (onRow)              { Ota::dismiss(); gOtaOverlay = false; if (active) active->onEnter(); else drawLauncher(); }
           gTap.pressed = false;
@@ -562,7 +565,7 @@ void loop() {
     bool done = false, doReply = false, doMute = false;
     if (gTap.pressed) {
       int w = puck::display().width();
-      bool onRow = (gTap.y >= PING_BTN_Y && gTap.y <= PING_BTN_Y + PING_BTN_H);
+      bool onRow = (gTap.y >= PING_BTN_Y() && gTap.y <= PING_BTN_Y() + PING_BTN_H);
       if (onRow && gTap.x < w / 2)        { doReply = true; done = true; }
       else if (onRow && gTap.x >= w / 2)  { doMute  = true; done = true; }
       else                                { done = true; }      // tap elsewhere = dismiss

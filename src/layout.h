@@ -16,4 +16,8 @@ namespace layout {
   // 320x240 CoreS3 -> layout pixel-identical; ~60 on a 360-tall round panel -> top-anchored content
   // (lists, headers, radar center, forms) drops to the vertical middle instead of hugging the top.
   inline int voff() { int d = H() - 240; return (puck::Display::isRound() && d > 0) ? d / 2 : 0; }
+  // Small horizontal padding for list rows so left/right text clears the round edge (0 on CoreS3).
+  // Lighter than inset() (which is for corner chrome) — rows sit nearer the vertical middle where the
+  // chord is wide, so they only need a little.
+  inline int pad() { return puck::Display::isRound() ? 16 : 0; }
 }

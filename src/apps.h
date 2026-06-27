@@ -66,7 +66,7 @@ class ClockApp : public App {
         else       snprintf(row, sizeof(row), "%-3s %2d:%02d", cs[i].label.c_str(), hh, mm);
       } else
         snprintf(row, sizeof(row), "%-3s --:--", cs[i].label.c_str());
-      puck::display().drawString(row, 40, 156 + i * 20);
+      puck::display().drawString(row, 40 + layout::pad(), 156 + layout::voff() + i * 20);
     }
   }
   void drawName() {                            // user's custom label at the top (fixed, dim) — "" hides it
@@ -75,7 +75,7 @@ class ClockApp : public App {
     puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2);
     puck::display().setTextDatum(top_center);
     puck::display().setTextColor(puck::display().color565(120, 140, 160), BLACK);
-    puck::display().drawString(nm, puck::display().width() / 2, 14);
+    puck::display().drawString(nm, puck::display().width() / 2, 14 + layout::voff());
   }
   void drawBackInto(lgfx::LovyanGFX* t) {        // composite the back chip so a full-screen blit doesn't flicker it
     int o = layout::inset();
@@ -106,7 +106,7 @@ class ClockApp : public App {
     t->fillSmoothCircle(cx, cy, 4, WHITE);
     String nm = Settings::displayName();
     if (nm.length()) { t->setFont(&fonts::Font0); t->setTextSize(2); t->setTextDatum(top_center);
-                       t->setTextColor(t->color565(120, 140, 160), BLACK); t->drawString(nm, w / 2, 6); }
+                       t->setTextColor(t->color565(120, 140, 160), BLACK); t->drawString(nm, w / 2, 6 + layout::voff()); }
     drawBackInto(t);
     if (haveFace) face.pushSprite(0, 0);
   }
@@ -204,16 +204,16 @@ public:
       if (ap) { int tw = band.textWidth(buf);          // AM/PM tag (Font7 can't draw letters) to the right
                 band.setFont(&fonts::Font0); band.setTextSize(2); band.setTextColor(CYAN);
                 band.setTextDatum(middle_left); band.drawString(ap, cx + dx + tw / 2 + 6, ty); }
-      band.pushSprite(0, BAND_TOP);                    // single blit -> zero flicker, incl. on drift
+      band.pushSprite(0, BAND_TOP + layout::voff());                    // single blit -> zero flicker, incl. on drift
     } else {                                           // fallback if the sprite couldn't allocate
-      if (moved) puck::display().fillRect(0, BAND_TOP, w, BAND_H, BLACK);
+      if (moved) puck::display().fillRect(0, BAND_TOP + layout::voff(), w, BAND_H, BLACK);
       puck::display().setTextDatum(middle_center);
       puck::display().setFont(&fonts::Font7); puck::display().setTextSize(1);
       puck::display().setTextColor(WHITE, BLACK);
-      puck::display().drawString(buf, cx + dx, 88 + dy);
+      puck::display().drawString(buf, cx + dx, 88 + layout::voff() + dy);
       if (ap) { int tw = puck::display().textWidth(buf);
                 puck::display().setFont(&fonts::Font0); puck::display().setTextSize(2); puck::display().setTextColor(CYAN, BLACK);
-                puck::display().setTextDatum(middle_left); puck::display().drawString(ap, cx + dx + tw / 2 + 6, 88 + dy); }
+                puck::display().setTextDatum(middle_left); puck::display().drawString(ap, cx + dx + tw / 2 + 6, 88 + layout::voff() + dy); }
     }
 
     if (minOrFull) { drawCities(); lastMin = m; }       // cities: fixed, opaque, redraw at most per minute
@@ -279,7 +279,7 @@ class WeatherApp : public App {
     g->setFont(&fonts::Font0);
     g->setTextSize(2);
     g->setTextColor(CYAN, BLACK);
-    g->drawString(r.city.length() ? r.city : String("Weather"), cx, 16);
+    g->drawString(r.city.length() ? r.city : String("Weather"), cx, 16 + layout::voff());
 
     // Today's high / low under the city (orange high, cyan low)
     if (r.hasDay) {
@@ -290,8 +290,8 @@ class WeatherApp : public App {
       int hw = g->textWidth(hi), gap = 18;
       int sx = cx - (hw + gap + g->textWidth(lo)) / 2;
       g->setTextDatum(middle_left);
-      g->setTextColor(ORANGE, BLACK); g->drawString(hi, sx, 44);
-      g->setTextColor(CYAN,   BLACK); g->drawString(lo, sx + hw + gap, 44);
+      g->setTextColor(ORANGE, BLACK); g->drawString(hi, sx, 44 + layout::voff());
+      g->setTextColor(CYAN,   BLACK); g->drawString(lo, sx + hw + gap, 44 + layout::voff());
     }
 
     // Big temperature (7-seg digits) + unit, centered as a group
@@ -338,17 +338,20 @@ class WeatherApp : public App {
     for (int i = 0; i < n && i < 4; i++) {
       Weather::Reading r;
       if (!Weather::get(i, r)) continue;
+      // round: keep each row's content near the wide middle of the circle (top row just above center,
+      // bottom just below) so it's vertically centered AND fits; x stays at the true cell center.
+      int coy = puck::Display::isRound() ? ((i / 2) ? 2 : 72) : 0;
       int x0 = (i % 2) * cw, y0 = (i / 2) * ch, cx = x0 + cw / 2;
 
       g->setTextDatum(top_center);
       g->setFont(&fonts::Font0); g->setTextSize(2);
       g->setTextColor(CYAN, BLACK);
-      g->drawString(r.city.length() ? r.city : String("--"), cx, y0 + 8);
+      g->drawString(r.city.length() ? r.city : String("--"), cx, y0 + 8 + coy);
 
       if (!r.ok) {
         g->setTextDatum(middle_center);
         g->setTextColor(DARKGREY, BLACK);
-        g->drawString("...", cx, y0 + ch / 2 + 8);
+        g->drawString("...", cx, y0 + ch / 2 + 8 + coy);
         continue;
       }
 
@@ -356,7 +359,7 @@ class WeatherApp : public App {
       g->setTextDatum(middle_center);
       g->setFont(&fonts::Font0); g->setTextSize(3);
       g->setTextColor(WHITE, BLACK);
-      g->drawString(t, cx, y0 + 46);
+      g->drawString(t, cx, y0 + 46 + coy);
 
       if (r.hasDay) {                                  // H (orange) / L (cyan)
         g->setFont(&fonts::Font0); g->setTextSize(2);
@@ -366,14 +369,14 @@ class WeatherApp : public App {
         int hw = g->textWidth(hi), gap = 10;
         int sx = cx - (hw + gap + g->textWidth(lo)) / 2;
         g->setTextDatum(middle_left);
-        g->setTextColor(ORANGE, BLACK); g->drawString(hi, sx, y0 + 74);
-        g->setTextColor(CYAN,   BLACK); g->drawString(lo, sx + hw + gap, y0 + 74);
+        g->setTextColor(ORANGE, BLACK); g->drawString(hi, sx, y0 + 74 + coy);
+        g->setTextColor(CYAN,   BLACK); g->drawString(lo, sx + hw + gap, y0 + 74 + coy);
       }
 
       g->setTextDatum(middle_center);
       g->setFont(&fonts::Font0); g->setTextSize(1);
       g->setTextColor(GREEN, BLACK);
-      g->drawString(Weather::describe(r.code), cx, y0 + 96);
+      g->drawString(Weather::describe(r.code), cx, y0 + 96 + coy);
     }
     if (haveScope) scope.pushSprite(0, 0);
     g = &puck::display();
@@ -390,7 +393,7 @@ class WeatherApp : public App {
     g->setTextDatum(top_center);
     g->setFont(&fonts::Font0); g->setTextSize(2);
     g->setTextColor(CYAN, BLACK);
-    g->drawString(r.city.length() ? r.city : String("Weather"), w / 2, 6);
+    g->drawString(r.city.length() ? r.city : String("Weather"), w / 2, 6 + layout::voff());
 
     if (!has || !r.ok) {
       g->setTextDatum(middle_center); g->setTextColor(DARKGREY, BLACK);
@@ -404,22 +407,22 @@ class WeatherApp : public App {
     g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(WHITE, BLACK);
     char cur[40];
     snprintf(cur, sizeof(cur), "%d%s  %s", (int)lroundf(r.temp), Settings::tempF() ? "F" : "C", Weather::describe(r.code));
-    g->drawString(cur, w / 2, 34);
+    g->drawString(cur, w / 2, 34 + layout::voff());
 
     // 7-day rows: day (white) | condition (green, small) | hi (orange) / lo (cyan), right-aligned
     static const char* DOW[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-    int top = 58, rh = 26;
+    int top = 58 + layout::voff(), rh = 26;
     for (int i = 0; i < r.nDays && i < Weather::FC_DAYS; i++) {
       int y = top + i * rh;
       g->setTextSize(2); g->setTextDatum(middle_left); g->setTextColor(WHITE, BLACK);
-      g->drawString(i == 0 ? "Today" : (r.fcWday[i] >= 0 ? DOW[r.fcWday[i]] : "-"), 10, y);
+      g->drawString(i == 0 ? "Today" : (r.fcWday[i] >= 0 ? DOW[r.fcWday[i]] : "-"), 10 + layout::pad(), y);
       g->setTextSize(1); g->setTextDatum(middle_center); g->setTextColor(GREEN, BLACK);
       g->drawString(Weather::describe(r.fcCode[i]), w / 2 + 6, y);
       g->setTextSize(2); g->setTextDatum(middle_right);
       char hi[6], lo[6];
       snprintf(hi, sizeof(hi), "%d", (int)lroundf(r.fcMax[i]));
       snprintf(lo, sizeof(lo), "%d", (int)lroundf(r.fcMin[i]));
-      int rx = w - 10;
+      int rx = w - 10 - layout::pad();
       g->setTextColor(CYAN, BLACK);     g->drawString(lo, rx, y);                 int lw = g->textWidth(lo);
       g->setTextColor(DARKGREY, BLACK); g->drawString("/", rx - lw - 3, y);       int sw = g->textWidth("/");
       g->setTextColor(ORANGE, BLACK);   g->drawString(hi, rx - lw - 3 - sw - 3, y);
@@ -548,8 +551,8 @@ class StocksApp : public App {
 
   const char* kbRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
   static const int KW = 32, KH = 30; int KB_TOP = 58;  // KB_TOP voff'd per-app in onEnter
-  static const int LIST_TOP = 34, ROW_H = 22;   // watchlist rows
-  static const int RES_TOP  = 30, RES_H = 26;   // search-result rows
+  static const int ROW_H = 22; int LIST_TOP = 34;   // LIST_TOP voff'd in onEnter
+  static const int RES_H = 26; int RES_TOP = 30;   // RES_TOP voff'd in onEnter
   int addY()  { return puck::display().height() - 28; }   // +Add / Remove button row
   static uint16_t dirColor(float d) { return d > 0 ? GREEN : (d < 0 ? RED : DARKGREY); }
 
@@ -599,7 +602,7 @@ class StocksApp : public App {
     int w = g->width(), h = g->height();
     g->fillScreen(BLACK);
     g->setTextDatum(top_center); g->setFont(&fonts::Font0); g->setTextSize(2);
-    g->setTextColor(CYAN, BLACK); g->drawString("Stocks", w / 2, 8);   // centered, clear of the top-left back chip
+    g->setTextColor(CYAN, BLACK); g->drawString("Stocks", w / 2, 8 + layout::voff());   // centered, clear of the top-left back chip
 
     if (!Stocks::configured()) {
       g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(ORANGE, BLACK);
@@ -615,18 +618,18 @@ class StocksApp : public App {
         Stocks::Quote q; if (!Stocks::get(order[k], q)) continue;
         int y = LIST_TOP + k * ROW_H + ROW_H / 2;
         g->setFont(&fonts::Font0); g->setTextSize(2);
-        g->setTextDatum(middle_left); g->setTextColor(WHITE, BLACK); g->drawString(q.sym, 12, y);
+        g->setTextDatum(middle_left); g->setTextColor(WHITE, BLACK); g->drawString(q.sym, 12 + layout::pad(), y);
         if (q.valid) {
           char pr[16]; snprintf(pr, sizeof pr, "$%.2f", q.price);
           char ch[12]; snprintf(ch, sizeof ch, "%+.2f%%", q.dp);
           uint16_t col = dirColor(q.change);
           g->setTextDatum(middle_right); g->setTextSize(2); g->setTextColor(col, BLACK);
-          g->drawString(pr, w - 12, y);
+          g->drawString(pr, w - 12 - layout::pad(), y);
           int pw = g->textWidth(pr);
-          g->setTextSize(1); g->drawString(ch, w - 12 - pw - 10, y);
+          g->setTextSize(1); g->drawString(ch, w - 12 - layout::pad() - pw - 10, y);
         } else {
           g->setTextDatum(middle_right); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
-          g->drawString("...", w - 12, y);
+          g->drawString("...", w - 12 - layout::pad(), y);
         }
       }
     }
@@ -652,7 +655,7 @@ class StocksApp : public App {
     for (int i = 0; i < n; i++) { Stocks::Quote t; if (Stocks::get(i, t) && t.sym == selSym) { q = t; ok = true; break; } }
 
     g->setTextDatum(top_center); g->setFont(&fonts::Font0); g->setTextSize(3);
-    g->setTextColor(CYAN, BLACK); g->drawString(selSym, w / 2, 24);   // below the top-left back chip
+    g->setTextColor(CYAN, BLACK); g->drawString(selSym, w / 2, 24 + layout::voff());   // below the top-left back chip
 
     if (!ok || !q.valid) {
       g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
@@ -664,11 +667,11 @@ class StocksApp : public App {
     uint16_t col = dirColor(q.change);
     char pr[16]; snprintf(pr, sizeof pr, "$%.2f", q.price);
     g->setTextDatum(top_center); g->setTextSize(3); g->setTextColor(WHITE, BLACK);
-    g->drawString(pr, w / 2, 56);
+    g->drawString(pr, w / 2, 56 + layout::voff());
     char ch[28]; snprintf(ch, sizeof ch, "%+.2f (%+.2f%%)", q.change, q.dp);
-    g->setTextSize(2); g->setTextColor(col, BLACK); g->drawString(ch, w / 2, 92);
+    g->setTextSize(2); g->setTextColor(col, BLACK); g->drawString(ch, w / 2, 92 + layout::voff());
 
-    int ry = 124; char b[16];
+    int ry = 124 + layout::voff(); char b[16];
     snprintf(b, sizeof b, "$%.2f", q.high);      statRow(ry, "Day High",   b, WHITE);
     snprintf(b, sizeof b, "$%.2f", q.low);       statRow(ry, "Day Low",    b, WHITE);
     snprintf(b, sizeof b, "$%.2f", q.open);      statRow(ry, "Open",       b, DARKGREY);
@@ -692,7 +695,7 @@ class StocksApp : public App {
     int w = puck::display().width();
     puck::display().fillScreen(BLACK);
     puck::display().setTextDatum(top_center); puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
-    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("type a ticker symbol", w / 2, 4);
+    puck::display().setTextColor(DARKGREY, BLACK); puck::display().drawString("type a ticker symbol", w / 2, 4 + layout::voff());
     puck::display().setTextDatum(middle_center); puck::display().setTextSize(3); puck::display().setTextColor(WHITE, BLACK);
     puck::display().drawString(typed.length() ? typed : String("_"), w / 2, 28);
     puck::display().setTextSize(2);
@@ -734,7 +737,7 @@ class StocksApp : public App {
     int w = g->width(), h = g->height();
     g->fillScreen(BLACK);
     g->setTextDatum(top_center); g->setFont(&fonts::Font0); g->setTextSize(2); g->setTextColor(CYAN, BLACK);
-    g->drawString(typed, w / 2, 6);
+    g->drawString(typed, w / 2, 6 + layout::voff());
     if (Stocks::searchPending()) {
       g->setTextDatum(middle_center); g->setTextSize(2); g->setTextColor(DARKGREY, BLACK);
       g->drawString("searching...", w / 2, h / 2);
@@ -747,10 +750,10 @@ class StocksApp : public App {
       for (int i = 0; i < n; i++) {
         int y = RES_TOP + i * RES_H + RES_H / 2;
         g->setTextDatum(middle_left); g->setFont(&fonts::Font0); g->setTextSize(2);
-        g->setTextColor(WHITE, BLACK); g->drawString(m[i].sym, 12, y);
+        g->setTextColor(WHITE, BLACK); g->drawString(m[i].sym, 12 + layout::pad(), y);
         String d = m[i].desc; if (d.length() > 24) d = d.substring(0, 24);
         g->setTextDatum(middle_right); g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
-        g->drawString(d, w - 12, y);
+        g->drawString(d, w - 12 - layout::pad(), y);
       }
     }
     drawBackInto(g);
@@ -772,6 +775,7 @@ public:
 
   void onEnter() override {
     mode = LIST; selSym = ""; typed = ""; focusIdx = 0;
+    LIST_TOP = 34 + layout::voff(); RES_TOP = 30 + layout::voff(); KB_TOP = 58 + layout::voff();
     beginScope();
     shownVer = 0xFFFFFFFF; dirty = true;
     Stocks::setActive(true);                 // resume polling while the app is open
@@ -1076,6 +1080,7 @@ class FlightApp : public App {
   // CoreS3 it keeps the original (116, 100). Used by both drawRadar and the touch hit-test so they match.
   int radarCy()   { return puck::Display::isRound() ? puck::display().height() / 2 : 116; }
   int radarMaxR() { return puck::Display::isRound() ? puck::display().height() / 2 - 30 : 100; }
+  bool zoomBtns() { return puck::Touch::maxPoints() < 2; }   // single-touch panel -> on-screen +/- zoom (no pinch)
 
   // on-screen keyboard layout
   const char* kbRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
@@ -1137,20 +1142,20 @@ class FlightApp : public App {
       g->setTextColor(DARKGREY, BLACK);
       g->drawString(Flight::updating() ? "scanning..." : "none in range", w / 2, 110 + layout::voff());
     } else {
-      for (int i = 0; i < count; i++) {
+      for (int i = 0; i < count && LIST_TOP + (i + 1) * LIST_ROWH <= SEARCH_BTN_Y; i++) {
         int y = LIST_TOP + i * LIST_ROWH;
         const Flight::Plane& p = planes[i];
         g->setTextDatum(middle_left);
         g->setTextColor(WHITE, BLACK);
-        g->drawString(p.flight, 8 + layout::inset(), y + 8);
+        g->drawString(p.flight, 8 + (puck::Display::isRound() ? 16 : 0), y + 8);
         g->setTextColor(GREEN, BLACK);
         char a[10]; snprintf(a, sizeof(a), "%dft", p.alt);
-        g->drawString(a, 110, y + 8);
+        g->drawString(a, 110 + (puck::Display::isRound() ? 40 : 0), y + 8);
         g->setTextColor(DARKGREY, BLACK);
         char d[12]; snprintf(d, sizeof(d), "%.0fnm", p.dist);
         g->setTextDatum(middle_right);
-        g->drawString(d, w - 30 - layout::inset(), y + 8);
-        drawArrow(w - 12 - layout::inset(), y + 8, p.track, 7, CYAN);
+        g->drawString(d, w - 30, y + 8);
+        drawArrow(w - 12 - (puck::Display::isRound() ? 16 : 0), y + 8, p.track, 7, CYAN);
       }
     }
     // bottom buttons: Radar | Search
@@ -1297,7 +1302,7 @@ class FlightApp : public App {
     g->drawString("N", nx, ny);
     g->setTextColor(DARKGREY, BLACK);
     char rl[10]; snprintf(rl, sizeof(rl), "%dnm", (int)lroundf(radarRange));  // outer ring = range
-    g->drawString(rl, fcx + maxR - 14, fcy - 8);
+    g->drawString(rl, puck::Display::isRound() ? (fcx - maxR + 20) : (fcx + maxR - 14), fcy - 8);
 
     // reset-zoom button (top-right), mirrors the back chip on the left; lit when zoomed in
     int rbx = w - RADAR_RB_W - 4;
@@ -1305,6 +1310,12 @@ class FlightApp : public App {
     g->drawRoundRect(rbx, 4, RADAR_RB_W, RADAR_RB_H, 5, DARKGREY);
     g->setTextColor(moved ? CYAN : DARKGREY, BLACK);
     g->drawString("RESET", rbx + RADAR_RB_W / 2, 4 + RADAR_RB_H / 2);
+    if (zoomBtns()) {                                  // single-touch: +/- zoom (right edge)
+      int zbX = w - 44, zbSz = 40, zbI = radarCy() - 44, zbO = radarCy() + 4;
+      g->setTextDatum(middle_center); g->setFont(&fonts::Font0); g->setTextSize(3); g->setTextColor(CYAN, BLACK);
+      g->drawRoundRect(zbX, zbI, zbSz, zbSz, 6, DARKGREY); g->drawString("+", zbX + zbSz / 2, zbI + zbSz / 2);
+      g->drawRoundRect(zbX, zbO, zbSz, zbSz, 6, DARKGREY); g->drawString("-", zbX + zbSz / 2, zbO + zbSz / 2);
+    }
 
     // reference airports (hollow squares + IATA): near the plane when plane-centered, else near you
     Flight::Airport aps[Flight::MAX_AIRPORTS];
@@ -1469,7 +1480,12 @@ class FlightApp : public App {
     auto td = puck::Touch::get(0);
     if (td.clicked && !suppressTap) {
       int tx = td.x, ty = td.y;
-      if (tx >= w - RADAR_RB_W - 4 && ty <= 4 + RADAR_RB_H) {                       // RESET pan + re-fit zoom
+      int zbX = w - 44, zbSz = 40, zbI = radarCy() - 44, zbO = radarCy() + 4;
+      if (zoomBtns() && tx >= zbX && tx <= zbX + zbSz && ty >= zbI && ty <= zbI + zbSz) {
+        radarRange = constrain(radarRange / 1.5f, RADAR_MIN_NM, RADAR_MAX_NM); autoFit = false; dirty = true;
+      } else if (zoomBtns() && tx >= zbX && tx <= zbX + zbSz && ty >= zbO && ty <= zbO + zbSz) {
+        radarRange = constrain(radarRange * 1.5f, RADAR_MIN_NM, RADAR_MAX_NM); autoFit = false; dirty = true;
+      } else if (tx >= w - RADAR_RB_W - 4 && ty <= 4 + RADAR_RB_H) {                       // RESET pan + re-fit zoom
         panX = 0; panY = 0; autoFit = true; dirty = true;
       } else if (Compass::available() && tx >= w - RADAR_RB_W - 4 && ty >= hgt - 22) {  // CAL
         Compass::startCal(); lastCalState = true; dirty = true;
@@ -1671,7 +1687,7 @@ class FlightApp : public App {
 
   void handleHistoryTap(int x, int y) {
     int w = puck::display().width();
-    if (y >= SEARCH_BTN_Y) {
+    if (y >= SEARCH_BTN_Y - 12) {
       if (x < w / 2) { mode = SEARCH; }            // Keys -> back to the keyboard
       else if (histN) { histN = 0; saveHistoryNvs(); }   // Clear
       dirty = true;
@@ -1810,7 +1826,7 @@ public:
     } else if (gTap.pressed) {
       int w = puck::display().width();
       if (mode == LIST) {
-        if (gTap.y >= SEARCH_BTN_Y) {
+        if (gTap.y >= SEARCH_BTN_Y - 12) {
           if (gTap.x < w / 2) { mode = RADAR; radarFreshView(); }   // open RADAR fresh: centered + auto-fit
           else { mode = SEARCH; typed = ""; }
           dirty = true;
@@ -1869,8 +1885,8 @@ class SetupApp : public App {
   bool     showVers = false;                         // the on-device version picker is open
   int      focusIdx = 0;                             // button nav: focused button / picker row
   uint32_t shownVerVer = 0xFFFFFFFF;                 // Ota::version() snapshot for the picker's lazy redraw
-  static const int OTA_Y = 204, OTA_H = 30;          // bottom button row (Check | Versions)
-  static const int VTOP = 56, VROWH = 26;            // version-picker rows
+  static const int OTA_H = 30; int OTA_Y = 204;      // OTA_Y voff'd in onEnter
+  static const int VROWH = 26; int VTOP = 56;        // VTOP voff'd in onEnter
 
   static String otaStatusText() {
     if (!Ota::configured()) return "updates off";
@@ -1894,29 +1910,29 @@ class SetupApp : public App {
 
     puck::display().setTextSize(2);
     puck::display().setTextColor(WHITE, BLACK);
-    puck::display().drawString("Settings", cx, 16);
+    puck::display().drawString("Settings", cx, 16 + layout::voff());
 
     puck::display().setTextColor(CYAN, BLACK);
-    puck::display().drawString("1. Join hotspot:", cx, 50);
+    puck::display().drawString("1. Join hotspot:", cx, 50 + layout::voff());
     puck::display().setTextColor(GREEN, BLACK);
-    puck::display().drawString(Provision::apName(), cx, 72);
+    puck::display().drawString(Provision::apName(), cx, 72 + layout::voff());
     puck::display().setTextColor(CYAN, BLACK);
-    puck::display().drawString("2. Browse to", cx, 102);
+    puck::display().drawString("2. Browse to", cx, 102 + layout::voff());
     puck::display().setTextColor(GREEN, BLACK);
-    puck::display().drawString("192.168.4.1", cx, 124);
+    puck::display().drawString("192.168.4.1", cx, 124 + layout::voff());
 
     char fw[28]; snprintf(fw, sizeof(fw), "Firmware v%d", FW_VERSION);
     puck::display().setTextColor(WHITE, BLACK);
-    puck::display().drawString(fw, cx, 156);
+    puck::display().drawString(fw, cx, 156 + layout::voff());
     puck::display().setTextSize(1);
     puck::display().setTextColor(puck::display().color565(120, 140, 160), BLACK);   // exact build (tells RCs apart)
-    puck::display().drawString(String("build ") + FW_BUILD, cx, 176);
+    puck::display().drawString(String("build ") + FW_BUILD, cx, 176 + layout::voff());
     Ota::Phase ph = Ota::phase();
     uint16_t sc = (ph == Ota::AVAILABLE) ? GREEN
                 : (ph == Ota::FAILED || (ph == Ota::IDLE && Ota::lastError().length())) ? ORANGE
                 : DARKGREY;
     puck::display().setTextColor(sc, BLACK);
-    puck::display().drawString(otaStatusText(), cx, 190);
+    puck::display().drawString(otaStatusText(), cx, 190 + layout::voff());
 
     // bottom row: Check (left) | Versions (right)
     puck::display().setTextDatum(middle_center);
@@ -1939,10 +1955,10 @@ class SetupApp : public App {
     puck::display().fillScreen(BLACK);
     puck::display().setTextDatum(top_center); puck::display().setFont(&fonts::Font0);
     puck::display().setTextSize(2); puck::display().setTextColor(WHITE, BLACK);
-    puck::display().drawString(Ota::isBeta() ? "Firmware (beta)" : "Firmware", cx, 12);
+    puck::display().drawString(Ota::isBeta() ? "Firmware (beta)" : "Firmware", cx, 12 + layout::voff());
     puck::display().setTextSize(1); puck::display().setTextColor(DARKGREY, BLACK);
     char cur[36]; snprintf(cur, sizeof(cur), "current v%d  -  tap to install", FW_VERSION);
-    puck::display().drawString(cur, cx, 36);
+    puck::display().drawString(cur, cx, 36 + layout::voff());
 
     if (!Ota::versionsReady()) {
       puck::display().setTextSize(2); puck::display().setTextColor(DARKGREY, BLACK);
@@ -1968,7 +1984,7 @@ class SetupApp : public App {
   }
 public:
   SetupApp() : App("Settings") {}
-  void onEnter() override { Provision::start(); showVers = false; shownOta = Ota::version(); draw(); }
+  void onEnter() override { Provision::start(); showVers = false; shownOta = Ota::version(); OTA_Y = 204 + layout::voff(); VTOP = 56 + layout::voff(); draw(); }
   bool onBack() override { if (showVers) { showVers = false; draw(); return true; } return false; }
   void loop() override {
     Provision::loop();                                 // self-restarts after a save
@@ -2139,18 +2155,18 @@ class EmojiApp : public App {
                                     : (Broker::configured() ? "connecting..." : "no MQTT");
     if (Notify::muted()) st += "   muted";
     puck::display().setTextColor(Broker::connected() ? GREEN : ORANGE, BLACK);
-    puck::display().drawString(st, cx, 6);
+    puck::display().drawString(st, cx, 6 + layout::voff());
 
     // recipient (tap the top strip to change)
     puck::display().setTextSize(2); puck::display().setTextColor(CYAN, BLACK);
-    puck::display().drawString("To: " + targetName(), cx, 24);
+    puck::display().drawString("To: " + targetName(), cx, 24 + layout::voff());
 
     // big emote (vector graphic)
     drawEmote(set[sel], cx, cy + 6);
 
     // controls
     puck::display().setTextSize(2); puck::display().setTextColor(DARKGREY, BLACK);
-    puck::display().drawString("<prev   SEND   next>", cx, puck::display().height() - 22);
+    puck::display().drawString("<prev   SEND   next>", cx, puck::display().height() - 22 - (puck::Display::isRound() ? 60 : 0));
   }
 
 public:
@@ -2170,7 +2186,7 @@ public:
 
     if (gTap.pressed) {
       int w = puck::display().width();
-      if (gTap.y < 50) {                       // top strip -> change recipient
+      if (gTap.y < 50 + layout::voff()) {       // top strip -> change recipient
         cycleTarget();
       } else if (gTap.x < w / 3)      { sel = (sel + 5) % 6; dirty = true; }
       else if (gTap.x > (w * 2) / 3)  { sel = (sel + 1) % 6; dirty = true; }
@@ -2216,9 +2232,9 @@ public:
   }
   void drawFocus() override {
     int w = puck::display().width(), h = puck::display().height(), x, y, ww, hh;
-    if (focusIdx == 0)      { x = 4;          y = 14;       ww = w - 8; hh = 24; }   // recipient strip
+    if (focusIdx == 0)      { x = 4;          y = 14 + layout::voff(); ww = w - 8; hh = 24; }   // recipient strip
     else if (focusIdx == 1) { x = w / 2 - 44; y = h / 2-30; ww = 88;    hh = 72; }   // big emote
-    else                    { x = w / 2 - 64; y = h - 34;   ww = 128;   hh = 24; }   // SEND control
+    else                    { x = w / 2 - 64; y = h - 34 - (puck::Display::isRound() ? 60 : 0); ww = 128; hh = 24; }   // SEND control
     puck::display().drawRoundRect(x, y, ww, hh, 4, WHITE);
   }
 };
@@ -2238,7 +2254,7 @@ class FriendsApp : public App {
   Friends::Friend req[Friends::MAX_FRIENDS]; int reqN = 0;   // incoming requests (rebuilt each frame)
   Friends::Friend fr[Friends::MAX_FRIENDS];  int frN  = 0;   // confirmed friends
 
-  static const int ROW_TOP = 92, ROWH = 23;
+  static const int ROWH = 23; int ROW_TOP = 92;   // ROW_TOP voff'd in onEnter
   static const int REQH = 34;            // incoming requests are 2 lines (name + device id) -> taller
   int focusIdx = 0;                      // button nav: focused HOME item (Add / Set-name / request / friend)
   static const int KW = 32, KH = 30; int KB_TOP = 58;  // KB_TOP voff'd per-app in onEnter
@@ -2250,10 +2266,10 @@ class FriendsApp : public App {
     puck::display().setTextDatum(top_center);
     puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
     puck::display().setTextColor(DARKGREY, BLACK);
-    puck::display().drawString(title, w / 2, 6);
+    puck::display().drawString(title, w / 2, 6 + layout::voff());
     puck::display().setTextDatum(middle_center); puck::display().setTextSize(3);
     puck::display().setTextColor(WHITE, BLACK);
-    puck::display().drawString(typed.length() ? typed : String("_"), w / 2, 32);
+    puck::display().drawString(typed.length() ? typed : String("_"), w / 2, 32 + layout::voff());
     puck::display().setTextSize(2);
     for (int r = 0; r < nRows; r++) {
       const char* row = rows[r];
@@ -2302,19 +2318,19 @@ class FriendsApp : public App {
     puck::display().setTextDatum(top_center);
     puck::display().setFont(&fonts::Font0);
     puck::display().setTextSize(2); puck::display().setTextColor(WHITE, BLACK);
-    puck::display().drawString("Friends", w / 2, 6);
+    puck::display().drawString("Friends", w / 2, 6 + layout::voff());
 
     // shareable code + name/status
     puck::display().setTextColor(CYAN, BLACK);
-    puck::display().drawString(Friends::myCode(), w / 2, 28);
+    puck::display().drawString(Friends::myCode(), w / 2, 28 + layout::voff());
     puck::display().setTextSize(1);
     String sub = Friends::myName();
     if (!Broker::connected()) sub += Broker::configured() ? "  (offline)" : "  (no MQTT)";
     puck::display().setTextColor(DARKGREY, BLACK);
-    puck::display().drawString(sub, w / 2, 50);
+    puck::display().drawString(sub, w / 2, 50 + layout::voff());
 
     // Add / Set name buttons
-    int bw = 132, bh = 22, by = 62, ax = w / 2 - bw - 6, nx = w / 2 + 6;
+    int bw = 132, bh = 22, by = 62 + layout::voff(), ax = w / 2 - bw - 6, nx = w / 2 + 6;
     puck::display().setTextDatum(middle_center);
     puck::display().setTextSize(2);                        // readable button labels (wider boxes fit them)
     puck::display().drawRoundRect(ax, by, bw, bh, 5, GREEN);
@@ -2359,7 +2375,7 @@ class FriendsApp : public App {
 
   void handleHomeTap(int x, int y) {
     int w = puck::display().width();
-    int bw = 132, bh = 22, by = 62, ax = w / 2 - bw - 6, nx = w / 2 + 6;
+    int bw = 132, bh = 22, by = 62 + layout::voff(), ax = w / 2 - bw - 6, nx = w / 2 + 6;
     if (y >= by && y <= by + bh) {
       if (x >= ax && x <= ax + bw) { mode = ADD;  typed = "";               dirty = true; return; }
       if (x >= nx && x <= nx + bw) { mode = NAME; typed = Friends::myName(); dirty = true; return; }
@@ -2385,7 +2401,7 @@ public:
   FriendsApp() : App("Friends") {}
   bool needsNet() const override { return true; }
 
-  void onEnter() override { mode = HOME; typed = ""; shownVer = 0xFFFFFFFF; dirty = true; }
+  void onEnter() override { mode = HOME; typed = ""; shownVer = 0xFFFFFFFF; dirty = true; ROW_TOP = 92 + layout::voff(); KB_TOP = 58 + layout::voff(); }
   bool onBack() override { if (mode != HOME) { mode = HOME; dirty = true; return true; } return false; }
 
   void loop() override {

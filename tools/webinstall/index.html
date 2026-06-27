@@ -17,9 +17,12 @@
   .btn{appearance:none;font:inherit;font-size:16px;font-weight:600;color:#fff;background:#2d7ff9;
        border:0;border-radius:12px;padding:14px 26px;cursor:pointer}
   .btn:active{background:#1b6ae0}
+  .btn.alt{font-size:15px;padding:11px 22px;background:#5b606b}
+  .btn.alt:active{background:#474b54}
   ol{text-align:left;color:#4b4f56;font-size:14px;margin:26px 0 0;padding-left:20px}
   ol li{margin:8px 0}
   .note{font-size:13px;color:#8a8d91;margin-top:18px}
+  #detectMsg{min-height:18px;margin:12px 0 16px;font-size:13.5px}
   .foot{text-align:center;color:#9a9da1;font-size:12px;margin-top:18px}
   code{background:#eef0f3;border-radius:5px;padding:1px 5px;font-size:13px}
   @media(prefers-color-scheme:dark){body{background:#0f1115;color:#e7e9ee}
@@ -34,7 +37,13 @@
   <h1>Install PlanePuck</h1>
   <p class="sub">Flash a fresh PlanePuck right from your browser</p>
 
-  <p class="board"><label>Board&nbsp;
+  <!-- Both boards are ESP32-S3 with the same native-USB id, so the browser can't tell them apart on its
+       own. If the puck is already running PlanePuck, this reads its board id over serial and locks the
+       installer to the matching image (flashing the wrong one needs a USB re-flash to recover). -->
+  <p><button class="btn alt" onclick="detectBoard()">Detect connected board</button></p>
+  <p id="detectMsg" class="note"></p>
+
+  <p class="board"><label>Board (auto-set above, or pick manually)&nbsp;
     <select id="board" style="font:inherit;font-size:15px;padding:7px 10px;border-radius:9px"
             onchange="document.getElementById('ewt').manifest=this.value">
       <option value="/planepuck/manifest.json">M5Stack CoreS3</option>
@@ -49,6 +58,7 @@
 
   <ol>
     <li>Plug your PlanePuck into this computer with a <b>USB-C data cable</b>.</li>
+    <li>If it's already running PlanePuck, click <b>Detect connected board</b> first so the right image is locked in.</li>
     <li>Click <b>Install PlanePuck</b> and choose the device's serial port.</li>
     <li>On a brand-new device, accept <b>Erase device</b>; the install takes ~1–2 min.</li>
     <li>When it reboots, join the <code>PlanePuck-Setup</code> Wi-Fi from your phone and enter your home Wi-Fi. That's it — everything else sets itself up.</li>
@@ -57,5 +67,59 @@
 </div>
 <p class="foot">PlanePuck &middot; first flash is over USB; updates after that are over the air</p>
 </div>
+
+<script>
+  // board id (from the firmware's "PLANEPUCK board=<id>" serial marker) -> manifest + friendly name
+  var BOARDS = {
+    "m5cores3":            { m: "/planepuck/manifest.json",                         n: "M5Stack CoreS3" },
+    "waveshare_1_85c_box": { m: "/planepuck/manifest-waveshare_1_85c_box.json",     n: "Waveshare 1.85\" (LCD-1.85C)" }
+  };
+  function setMsg(html, color) {
+    var el = document.getElementById("detectMsg");
+    el.innerHTML = html; el.style.color = color || "";
+  }
+  async function detectBoard() {
+    if (!("serial" in navigator)) { setMsg("⚠️ Web Serial needs desktop <b>Chrome</b> or <b>Edge</b>.", "#c0392b"); return; }
+    var port;
+    try { port = await navigator.serial.requestPort(); }
+    catch (e) { setMsg("No serial port selected.", "#8a8d91"); return; }
+    setMsg("Detecting… (reading the device for a few seconds)");
+    var found = null, buf = "";
+    try {
+      await port.open({ baudRate: 115200 });
+      var reader = port.readable.getReader();
+      var t0 = Date.now();
+      while (Date.now() - t0 < 3500 && !found) {
+        var to = setTimeout(function () { reader.cancel().catch(function(){}); }, Math.max(1, 3500 - (Date.now() - t0)));
+        var r;
+        try { r = await reader.read(); } catch (e) { break; }
+        clearTimeout(to);
+        if (r.done) break;
+        if (r.value) {
+          buf += new TextDecoder().decode(r.value);
+          var mm = buf.match(/PLANEPUCK board=([A-Za-z0-9_]+)/);
+          if (mm) found = mm[1];
+          if (buf.length > 8192) buf = buf.slice(-2048);
+        }
+      }
+      try { reader.releaseLock(); } catch (e) {}
+    } catch (e) {
+      setMsg("Detect failed (" + e.message + "). Pick your board manually below.", "#c0392b");
+    }
+    try { await port.close(); } catch (e) {}   // release the port so the installer can use it
+
+    if (found && BOARDS[found]) {
+      var sel = document.getElementById("board");
+      sel.value = BOARDS[found].m;
+      document.getElementById("ewt").manifest = BOARDS[found].m;
+      setMsg("✓ Detected <b>" + BOARDS[found].n + "</b> — installer locked to the matching image.", "#1a9b4b");
+    } else if (found) {
+      setMsg("Detected board \"" + found + "\", but there's no image for it here. Pick manually.", "#c0392b");
+    } else {
+      setMsg("⚠️ No running PlanePuck detected (blank or non-booting device?). Pick your board below — flashing the wrong one needs a USB re-flash to recover.", "#c0392b");
+    }
+  }
+  window.detectBoard = detectBoard;
+</script>
 </body>
 </html>
