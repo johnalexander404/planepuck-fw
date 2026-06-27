@@ -547,7 +547,7 @@ class StocksApp : public App {
   int    order[MAX_STOCKS]; int orderN = 0;     // LIST display order (indices into the watchlist), sorted by top movers
 
   const char* kbRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
-  static const int KW = 32, KH = 30, KB_TOP = 58;
+  static const int KW = 32, KH = 30; int KB_TOP = 58;  // KB_TOP voff'd per-app in onEnter
   static const int LIST_TOP = 34, ROW_H = 22;   // watchlist rows
   static const int RES_TOP  = 30, RES_H = 26;   // search-result rows
   int addY()  { return puck::display().height() - 28; }   // +Add / Remove button row
@@ -1070,12 +1070,16 @@ class FlightApp : public App {
   int      lastCalSec = -1;                    // last calibration countdown we drew
   bool     lastCalState = false;               // were we calibrating last frame
 
-  static const int LIST_TOP = 30, LIST_ROWH = 25, SEARCH_BTN_Y = 206;
+  static const int LIST_ROWH = 25; int LIST_TOP = 30, SEARCH_BTN_Y = 206;  // LIST_TOP/btn voff'd in onEnter
   static const int RADAR_RB_W = 54, RADAR_RB_H = 22;   // reset-zoom button (top-right)
+  // Radar fills the panel: on the round 360 panel the scope centers at h/2 with bigger rings; on the
+  // CoreS3 it keeps the original (116, 100). Used by both drawRadar and the touch hit-test so they match.
+  int radarCy()   { return puck::Display::isRound() ? puck::display().height() / 2 : 116; }
+  int radarMaxR() { return puck::Display::isRound() ? puck::display().height() / 2 - 30 : 100; }
 
   // on-screen keyboard layout
   const char* kbRows[4] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
-  static const int KW = 32, KH = 30, KB_TOP = 58;
+  static const int KW = 32, KH = 30; int KB_TOP = 58;  // KB_TOP voff'd per-app in onEnter
 
   void drawArrow(int cx, int cy, float deg, int len, uint16_t col) {
     float r = deg * PI / 180.0f;
@@ -1127,26 +1131,26 @@ class FlightApp : public App {
     g->setFont(&fonts::Font0); g->setTextSize(2);   // size 2 throughout -> readable at arm's length
     g->setTextColor(CYAN, BLACK);
     char hdr[28]; snprintf(hdr, sizeof(hdr), "Planes nearby: %d", count);
-    g->drawString(hdr, w / 2, 8);
+    g->drawString(hdr, w / 2, 8 + layout::voff());
 
     if (count == 0) {
       g->setTextColor(DARKGREY, BLACK);
-      g->drawString(Flight::updating() ? "scanning..." : "none in range", w / 2, 110);
+      g->drawString(Flight::updating() ? "scanning..." : "none in range", w / 2, 110 + layout::voff());
     } else {
       for (int i = 0; i < count; i++) {
         int y = LIST_TOP + i * LIST_ROWH;
         const Flight::Plane& p = planes[i];
         g->setTextDatum(middle_left);
         g->setTextColor(WHITE, BLACK);
-        g->drawString(p.flight, 8, y + 8);
+        g->drawString(p.flight, 8 + layout::inset(), y + 8);
         g->setTextColor(GREEN, BLACK);
         char a[10]; snprintf(a, sizeof(a), "%dft", p.alt);
         g->drawString(a, 110, y + 8);
         g->setTextColor(DARKGREY, BLACK);
         char d[12]; snprintf(d, sizeof(d), "%.0fnm", p.dist);
         g->setTextDatum(middle_right);
-        g->drawString(d, w - 30, y + 8);
-        drawArrow(w - 12, y + 8, p.track, 7, CYAN);
+        g->drawString(d, w - 30 - layout::inset(), y + 8);
+        drawArrow(w - 12 - layout::inset(), y + 8, p.track, 7, CYAN);
       }
     }
     // bottom buttons: Radar | Search
@@ -1187,7 +1191,7 @@ class FlightApp : public App {
   // readable over the range rings, in a larger font than before (callsign + alt + speed at size 2).
   void drawTrackedOverlay(const Flight::Plane& tp) {
     uint16_t pbg = g->color565(12, 16, 22);   // near-black card so text reads over the rings
-    int px = 2, py = 31, pw = 132, ph = 102, tx = px + 8;
+    int px = 2, py = 31 + layout::voff(), pw = 132, ph = 102, tx = px + 8;
     g->fillRoundRect(px, py, pw, ph, 5, pbg);
     g->drawRoundRect(px, py, pw, ph, 5, DARKGREY);
     g->setTextDatum(top_left);
@@ -1226,7 +1230,7 @@ class FlightApp : public App {
   void drawAirportOverlay(const String& code, const String& name, float youDist) {
     (void)name;                                   // name dropped to keep the card small; the code identifies it
     uint16_t pbg = g->color565(12, 16, 22);
-    int px = 2, py = 31, pw = 92, ph = 42, tx = px + 7;
+    int px = 2, py = 31 + layout::voff(), pw = 92, ph = 42, tx = px + 7;
     g->fillRoundRect(px, py, pw, ph, 5, pbg);
     g->drawRoundRect(px, py, pw, ph, 5, DARKGREY);
     g->setTextDatum(top_left);
@@ -1268,8 +1272,8 @@ class FlightApp : public App {
   void drawRadar() {
     if (Compass::calibrating()) { drawRadarCal(); return; }   // cal screen draws direct (no sprite)
     g = haveScope ? (lgfx::LovyanGFX*)&scope : (lgfx::LovyanGFX*)&puck::display();  // compose off-screen, blit once
-    int w = g->width(), cx = w / 2 + panX, cy = 116 + panY, maxR = 100;  // cx/cy = panned world origin
-    int fcx = w / 2, fcy = 116;                        // FIXED scope center: rings + crosshair live here
+    int w = g->width(), cx = w / 2 + panX, cy = radarCy() + panY, maxR = radarMaxR();  // cx/cy = panned world origin
+    int fcx = w / 2, fcy = radarCy();                  // FIXED scope center: rings + crosshair live here
     float scale = maxR / radarRange;
     g->fillScreen(BLACK);
 
@@ -1336,28 +1340,28 @@ class FlightApp : public App {
       if (searchTimedOut) {
         g->setFont(&fonts::Font0); g->setTextSize(2);
         g->setTextColor(ORANGE, BLACK);
-        g->drawString(selFlight + " not found", w / 2, 100);
+        g->drawString(selFlight + " not found", w / 2, 100 + layout::voff());
         g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
-        g->drawString("not airborne or out of range", w / 2, 126);
-        g->drawString("tap to go back", w / 2, 146);
+        g->drawString("not airborne or out of range", w / 2, 126 + layout::voff());
+        g->drawString("tap to go back", w / 2, 146 + layout::voff());
       } else {
         g->setFont(&fonts::Font0); g->setTextSize(1);
         g->setTextColor(ORANGE, BLACK);
-        g->drawString("locating " + selFlight + "...", w / 2, 116);
+        g->drawString("locating " + selFlight + "...", w / 2, 116 + layout::voff());
       }
     } else if (aptMode && !aptCtr) {             // airport lookup in progress / not found
       g->setTextDatum(middle_center);
       if (Flight::airportFailed() || millis() - aptStart > SEARCH_TIMEOUT_MS) {
         g->setFont(&fonts::Font0); g->setTextSize(2);
         g->setTextColor(ORANGE, BLACK);
-        g->drawString(aptTyped + " not found", w / 2, 100);
+        g->drawString(aptTyped + " not found", w / 2, 100 + layout::voff());
         g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
-        g->drawString("unknown airport code", w / 2, 126);
-        g->drawString("< back", w / 2, 146);
+        g->drawString("unknown airport code", w / 2, 126 + layout::voff());
+        g->drawString("< back", w / 2, 146 + layout::voff());
       } else {
         g->setFont(&fonts::Font0); g->setTextSize(1);
         g->setTextColor(ORANGE, BLACK);
-        g->drawString("locating airport " + aptTyped + "...", w / 2, 116);
+        g->drawString("locating airport " + aptTyped + "...", w / 2, 116 + layout::voff());
       }
     } else {
       if (aptCtr) {                              // the airport at center + a "you" reference marker
@@ -1429,7 +1433,7 @@ class FlightApp : public App {
   // Radar input: two fingers = pinch zoom, single tap = select plane / exit / reset / cal.
   // Reads the touch panel directly because a pinch needs both points, which gTap omits.
   void handleRadar() {
-    int w = puck::display().width(), cx = w / 2, cy = 116, maxR = 100, hgt = puck::display().height();
+    int w = puck::display().width(), cx = w / 2, cy = radarCy(), maxR = radarMaxR(), hgt = puck::display().height();
     if (Compass::calibrating()) { gTap.pressed = false; return; }   // ignore taps mid-cal
     int tc = puck::Touch::count();
 
@@ -1500,7 +1504,7 @@ class FlightApp : public App {
     if (!have) {
       g->setFont(&fonts::Font0); g->setTextSize(1);
       g->setTextColor(DARKGREY, BLACK);
-      g->drawString("route loading...", cx, 50);
+      g->drawString("route loading...", cx, 50 + layout::voff());
       return;
     }
     if (ri.ok) {                        // OpenSky: the aircraft's most recent tracked flight
@@ -1510,11 +1514,11 @@ class FlightApp : public App {
                ri.destIata.length() ? ri.destIata.c_str() : "?");
       g->setFont(&fonts::Font0); g->setTextSize(2);
       g->setTextColor(CYAN, BLACK);
-      g->drawString(r, cx, 46);
+      g->drawString(r, cx, 46 + layout::voff());
     } else {
       g->setFont(&fonts::Font0); g->setTextSize(1);
       g->setTextColor(DARKGREY, BLACK);
-      g->drawString("route unknown", cx, 54);
+      g->drawString("route unknown", cx, 54 + layout::voff());
     }
   }
 
@@ -1530,14 +1534,14 @@ class FlightApp : public App {
     g->setTextDatum(top_center);
     g->setFont(&fonts::Font0);
     g->setTextSize(3); g->setTextColor(WHITE, BLACK);
-    g->drawString(selFlight, cx, 8);
+    g->drawString(selFlight, cx, 8 + layout::voff());
 
     if (!p) {
       g->setTextSize(2); g->setTextColor(ORANGE, BLACK);
-      g->drawString(searched && Flight::updating() ? "acquiring..." : "no signal", cx, 96);
+      g->drawString(searched && Flight::updating() ? "acquiring..." : "no signal", cx, 96 + layout::voff());
       if (!(searched && Flight::updating())) {     // a tracked plane drops off ADS-B on landing / out of range
         g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
-        g->drawString("landed or out of range", cx, 122);
+        g->drawString("landed or out of range", cx, 122 + layout::voff());
       }
       g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
       g->drawString("tap to go back", cx, g->height() - 16);
@@ -1548,13 +1552,13 @@ class FlightApp : public App {
 
     drawRoute();
 
-    drawArrow(cx, 108, p->track, 22, CYAN);
+    drawArrow(cx, 108 + layout::voff(), p->track, 22, CYAN);
     g->setTextDatum(top_center);
     g->setFont(&fonts::Font0); g->setTextSize(1);
     g->setTextColor(CYAN, BLACK);
     char hd[16]; snprintf(hd, sizeof(hd), "hdg %03d  %s", (int)lroundf(p->track),
                           p->type.length() ? p->type.c_str() : "");
-    g->drawString(hd, cx, 134);
+    g->drawString(hd, cx, 134 + layout::voff());
 
     g->setTextDatum(middle_center);
     g->setTextSize(2);
@@ -1562,16 +1566,16 @@ class FlightApp : public App {
     g->setTextColor(GREEN, BLACK);
     snprintf(line, sizeof(line), "%d ft", p->alt);
     int tw = g->textWidth(line);
-    g->drawString(line, cx, 160);
+    g->drawString(line, cx, 160 + layout::voff());
     int dir = p->vrate > 100 ? 1 : (p->vrate < -100 ? -1 : 0);
-    drawVArrow(cx + tw / 2 + 16, 160, dir);     // climb/descend indicator
+    drawVArrow(cx + tw / 2 + 16, 160 + layout::voff(), dir);     // climb/descend indicator
     g->setTextColor(WHITE, BLACK);
     snprintf(line, sizeof(line), "%.0f kt", p->gs);
-    g->drawString(line, cx, 184);
+    g->drawString(line, cx, 184 + layout::voff());
 
     g->setTextSize(1); g->setTextColor(DARKGREY, BLACK);
     snprintf(line, sizeof(line), "pos %.2f, %.2f", p->lat, p->lon);
-    g->drawString(line, cx, 208);
+    g->drawString(line, cx, 208 + layout::voff());
     const char* climb = p->vrate > 100 ? "climbing" : (p->vrate < -100 ? "descending" : "level");
     snprintf(line, sizeof(line), "%.0f nm @ %03d  -  %s", p->dist, (int)lroundf(p->bearing), climb);
     g->drawString(line, cx, g->height() - 12);
@@ -1639,10 +1643,10 @@ class FlightApp : public App {
     puck::display().setTextDatum(top_center);
     puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
     puck::display().setTextColor(CYAN, BLACK);
-    puck::display().drawString("Recent searches", w / 2, 10);
+    puck::display().drawString("Recent searches", w / 2, 10 + layout::voff());
     if (histN == 0) {
       puck::display().setTextColor(DARKGREY, BLACK);
-      puck::display().drawString("no recent searches", w / 2, 110);
+      puck::display().drawString("no recent searches", w / 2, 110 + layout::voff());
     } else {
       puck::display().setTextSize(2);
       puck::display().setTextDatum(middle_left);
@@ -1684,7 +1688,7 @@ class FlightApp : public App {
     puck::display().setTextDatum(top_center);
     puck::display().setFont(&fonts::Font0); puck::display().setTextSize(1);
     puck::display().setTextColor(DARKGREY, BLACK);
-    puck::display().drawString("flight no. or airport code", w / 2, 4);
+    puck::display().drawString("flight no. or airport code", w / 2, 4 + layout::voff());
     // typed text
     puck::display().setTextDatum(middle_center);
     puck::display().setFont(&fonts::Font0); puck::display().setTextSize(3);
@@ -1755,6 +1759,7 @@ public:
 
   void onEnter() override {
     mode = LIST; searched = false; aptMode = false; searchAcquired = false; searchTimedOut = false; selFlight = ""; typed = "";
+    LIST_TOP = 30 + layout::voff(); SEARCH_BTN_Y = 206 + layout::voff(); KB_TOP = 58 + layout::voff();  // center on round panel
     Flight::clearCenter();                  // start at your-location radar (drop any prior airport center)
     shownVer = 0xFFFFFFFF; dirty = true;
     radarRange = FLIGHT_RADIUS_NM; pinchPrev = 0; suppressTap = false; panX = panY = 0; dragging = false;
@@ -2236,7 +2241,7 @@ class FriendsApp : public App {
   static const int ROW_TOP = 92, ROWH = 23;
   static const int REQH = 34;            // incoming requests are 2 lines (name + device id) -> taller
   int focusIdx = 0;                      // button nav: focused HOME item (Add / Set-name / request / friend)
-  static const int KW = 32, KH = 30, KB_TOP = 58;
+  static const int KW = 32, KH = 30; int KB_TOP = 58;  // KB_TOP voff'd per-app in onEnter
 
   // ----- shared on-screen keyboard (ADD = hex, NAME = alpha) -----
   void drawKeyboard(const char* const* rows, int nRows, const char* title, const char* okLabel) {

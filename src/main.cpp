@@ -19,10 +19,11 @@ FriendsApp friendsApp;
 App* apps[] = { &clockApp, &emojiApp, &weatherApp, &stocksApp, &spotifyApp, &flightApp, &setupApp, &friendsApp };
 const int APP_COUNT = sizeof(apps) / sizeof(apps[0]);
 
-// Launcher is a radial ring of circular chips. Geometry is computed in one
-// place (launcherChipPos) so draw + hit-test can't drift.
-static const int CHIP_R  = 30;   // chip radius
-static const int RING_R  = 64;   // distance of chips from the ring center
+// Launcher is a radial ring of circular chips. Geometry is computed in one place (launcherChipPos +
+// chipR/ringR) so draw + hit-test can't drift. The small rectangular CoreS3 keeps the original 30/64;
+// a larger round panel widens the ring and grows the chips to use the extra space (less crowding).
+static int chipR() { return puck::Display::isRound() ? (layout::H() * 34 / 360) : 30; }
+static int ringR() { return puck::Display::isRound() ? (layout::H() * 112 / 360) : 64; }
 
 App* active = nullptr;
 
@@ -45,8 +46,8 @@ void launcherChipPos(int i, int& cx, int& cy) {
   int oy = puck::display().height() / 2 + 18;     // nudged down to clear the title
   if (APP_COUNT <= 1) { cx = ox; cy = oy; return; }
   float a = -PI / 2 + (2.0f * PI * i) / APP_COUNT;   // start at top, clockwise
-  cx = ox + (int)lroundf(RING_R * cosf(a));
-  cy = oy + (int)lroundf(RING_R * sinf(a));
+  cx = ox + (int)lroundf(ringR() * cosf(a));
+  cy = oy + (int)lroundf(ringR() * sinf(a));
 }
 
 void mqttRouter(const String& t, const String& p) {
@@ -106,7 +107,7 @@ void drawAppIcon(const char* name, int cx, int cy, uint16_t chip) {
     puck::display().drawWedgeLine(cx + 8,  cy - 3, cx + 16, cy - 11, 1.6f, 1.6f, ink);
     puck::display().fillTriangle(cx + 16, cy - 12, cx + 16, cy - 3, cx + 7, cy - 12, ink);  // arrowhead
   } else if (!strcmp(name, "Spotify")) {
-    drawSpotifyMark(&puck::display(), cx, cy, CHIP_R);   // the whole chip becomes the green Spotify mark
+    drawSpotifyMark(&puck::display(), cx, cy, chipR());   // the whole chip becomes the green Spotify mark
   } else {
     char c[2] = { name[0], 0 };                                      // fallback: first letter
     puck::display().setTextDatum(middle_center);
@@ -136,13 +137,13 @@ void drawLauncher() {
   for (int i = 0; i < APP_COUNT; i++) {
     int cx, cy; launcherChipPos(i, cx, cy);
     uint16_t col = palette[i % pn];
-    puck::display().fillSmoothCircle(cx, cy, CHIP_R, col);   // solid, anti-aliased chip
+    puck::display().fillSmoothCircle(cx, cy, chipR(), col);   // solid, anti-aliased chip
     drawAppIcon(apps[i]->name, cx, cy, col);            // vector glyph on top
   }
   if (gButtonMode) {                                    // button nav: ring the focused chip
     int cx, cy; launcherChipPos(gLauncherFocus, cx, cy);
-    puck::display().drawCircle(cx, cy, CHIP_R + 3, WHITE);
-    puck::display().drawCircle(cx, cy, CHIP_R + 4, WHITE);
+    puck::display().drawCircle(cx, cy, chipR() + 3, WHITE);
+    puck::display().drawCircle(cx, cy, chipR() + 4, WHITE);
   }
   gLauncherIdleSince = millis();                        // (re)start the idle -> Clock countdown
 }
@@ -607,7 +608,7 @@ void loop() {
       for (int i = 0; i < APP_COUNT; i++) {
         int cx, cy; launcherChipPos(i, cx, cy);
         int dx = gTap.x - cx, dy = gTap.y - cy;
-        if (dx * dx + dy * dy <= CHIP_R * CHIP_R) { enterApp(i); break; }
+        if (dx * dx + dy * dy <= chipR() * chipR()) { enterApp(i); break; }
       }
       gTap.pressed = false;
     } else if (bS) {                                     // button: open the focused chip
