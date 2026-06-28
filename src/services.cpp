@@ -268,8 +268,19 @@ namespace Provision {
     // normally left blank — but always offer it as a MANUAL OVERRIDE (e.g. enrollment failed, or the
     // broker password drifted out of sync). Typed = save + use it (skips enroll); blank = keep current.
     h += sec("<path d='M5 5h14v10H9l-4 3z'/>", "Friends");
-    h += F("<label>MQTT password (optional; auto-registers with the broker)</label>"
-           "<input name=mpass type=password placeholder='unchanged if left blank'></div>");
+    if (strlen(ENROLL_URL) && strlen(ENROLL_TOKEN)) {
+      // Self-enroll is on, so the password is OPTIONAL — leave it blank (or type something the broker
+      // won't accept) and the puck registers its own random one. The hint guides anyone who does want to
+      // pick one; the field isn't hard-blocked, since an invalid entry just falls back to auto-register.
+      h += F("<label>MQTT password (optional)</label>"
+             "<input name=mpass type=password maxlength=64 placeholder='blank = register automatically'>"
+             "<div style='color:#8a8d91;font-size:12px;margin-top:4px'>"
+             "Leave blank and PlanePuck registers its own. To choose one, use 8&ndash;64 letters &amp; "
+             "numbers (anything else is ignored and it auto-registers).</div></div>");
+    } else {
+      h += F("<label>MQTT password (optional)</label>"
+             "<input name=mpass type=password placeholder='unchanged if left blank'></div>");
+    }
     h += F("<button type=submit>Save &amp; restart</button></form>"
            "<p class=foot>PlanePuck &middot; settings are saved on the device</p>"
            "</div></div></body></html>");
@@ -278,15 +289,37 @@ namespace Provision {
 
   static void handleRoot() { server.send(200, "text/html", page()); }
 
+  // Mirrors the enroll server's accepted password set (8-64 letters/digits). Used to decide whether a
+  // typed password can be registered as-is, or should be discarded in favor of a random self-enrollment;
+  // also gates the connect task's self-heal so it never re-POSTs a password the endpoint would reject.
+  static bool validMqttPass(const String& p) {
+    if (p.length() < 8 || p.length() > 64) return false;
+    for (size_t i = 0; i < p.length(); i++) {
+      char c = p[i];
+      if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return false;
+    }
+    return true;
+  }
+
   static void handleSave() {
+    // With self-enroll on, the broker's enroll endpoint only accepts 8-64 alphanumeric chars. Rather than
+    // nag on a bad password, DISCARD it and let the puck self-provision a fresh random one exactly like a
+    // first-boot enrollment: clearing NVS makes mqttPass() return "" (MQTT_PASS is blank), which routes
+    // connectTask into enrollOnce() (random pw -> enroll) on the next connect. A manually managed broker
+    // (no enroll) has no validation to honor, so it still takes any password verbatim.
+    String mp = server.arg("mpass");
+    if (mp.length() && strlen(ENROLL_URL) && strlen(ENROLL_TOKEN) && !validMqttPass(mp)) {
+      Settings::saveMqttPass("");            // -> connectTask: pass=="" + enrollConfigured -> enrollOnce()
+      Settings::setMqttSyncPending(false);   // nothing valid to register; enrollOnce provisions a random one
+      mp = "";                               // fall through and treat as "left blank" below
+    }
     String s = server.arg("ssid");
     String p = server.arg("pass");
     String t = server.arg("tz");
     if (s.length() && p.length()) Settings::saveWifi(s, p);   // blank password keeps the saved one
     if (t.length()) Settings::saveTz(t);
     Settings::saveZip(server.arg("zip"));   // saved as-is; blank clears it (back to IP location)
-    String mp = server.arg("mpass");
-    if (mp.length()) { Settings::saveMqttPass(mp); Settings::setMqttSyncPending(true); }   // blank = keep current (don't wipe); typed -> also register with the broker after reconnect
+    if (mp.length()) { Settings::saveMqttPass(mp); Settings::setMqttSyncPending(true); }   // mp validated above; blank = keep current (don't wipe); typed -> register with the broker after reconnect
     String fk = server.arg("fhkey");
     if (fk.length()) Settings::saveFinnhubKey(fk); // blank = keep current (Stocks app key)
     String sp = server.arg("sprt"); sp.trim();          // strip stray paste whitespace/newline
@@ -2002,6 +2035,8 @@ namespace Broker {
   // gUp with no lock: the task touches it ONLY while disconnected (gUp false); the UI touches it
   // ONLY while connected (gUp true). Each side flips gUp to hand off, so they never overlap.
   static void connectTask(void*) {
+    static uint32_t lastReenroll = 0;   // self-heal backoff: re-enroll at most once / 60s
+    static bool reenrollArmed = true;   // allow one immediate re-enroll attempt per connect session
     for (;;) {
       if (enabled() && Net::online() && !gUp) {
         String pass = Settings::mqttPass();
@@ -2030,10 +2065,27 @@ namespace Broker {
                              gWillTopic.c_str(), 0, gWillRetain, gWillMsg.c_str())     //  offline on an ungraceful drop
             : client.connect(cid.c_str(), user.c_str(), pass.c_str());
           if (ok) {
-            needSub = true; gUp = true;
+            needSub = true; gUp = true; reenrollArmed = true;   // re-arm self-heal for the next session
             log_e("[mqtt] connected as %s", user.c_str());
           } else {
-            log_e("[mqtt] connect failed state=%d heap=%u", client.state(), (unsigned)ESP.getFreeHeap());
+            int st = client.state();
+            log_e("[mqtt] connect failed state=%d heap=%u", st, (unsigned)ESP.getFreeHeap());
+            // Self-heal auth drift: state 4 (bad user/pw) / 5 (not authorized) means the broker's stored
+            // password no longer matches ours. Re-register our current NVS password with the enroll
+            // endpoint so both ends match again — no portal save, no manual mosquitto_passwd. Gated on a
+            // VALID password (a legacy too-short/symbol one would just 400 forever) + a synced clock, and
+            // backed off (one immediate try per session, then <=1/60s) so a down endpoint or a persistent
+            // mismatch can't hammer the broker. On success the next 3s cycle reconnects.
+            if ((st == 4 || st == 5) && enrollConfigured() && ClockService::synced()
+                && Provision::validMqttPass(pass)
+                && (reenrollArmed || (millis() - lastReenroll) > 60000)) {
+              reenrollArmed = false; lastReenroll = millis();
+              if (enrollPost(pass)) {
+                log_e("[mqtt] self-heal: re-registered password after state=%d", st);
+                Serial.printf("[enroll] self-heal re-registered %s after state=%d\n",
+                              Friends::myCode().c_str(), st);
+              }
+            }
           }
         }
       }
