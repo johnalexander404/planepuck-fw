@@ -1,0 +1,35 @@
+name: enroll-pins
+
+# List the TOFU key-pinned device codes + counters (read-only). One of the per-action PlanePuck ops
+# workflows — copy to `.github/workflows/enroll-pins.yml` in your PRIVATE repo. Reads the droplet's enroll
+# pin store over SSH (NOT MQTT). Secrets: ENROLL_SSH (user@droplet, root/NOPASSWD-sudoer) + ENROLL_SSH_KEY.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  enroll-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: johnalexander404/planepuck-fw   # <- change if you forked the firmware repo
+          sparse-checkout: tools
+      - name: Set up droplet SSH
+        env:
+          ENROLL_SSH: ${{ secrets.ENROLL_SSH }}
+          ENROLL_SSH_KEY: ${{ secrets.ENROLL_SSH_KEY }}
+        run: |
+          if [ -z "${ENROLL_SSH:-}" ] || [ -z "${ENROLL_SSH_KEY:-}" ]; then
+            echo "::error::set ENROLL_SSH (user@droplet) + ENROLL_SSH_KEY secrets in THIS repo"; exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ENROLL_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${ENROLL_SSH##*@}" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: enroll-admin.py pins
+        env:
+          ENROLL_SSH: ${{ secrets.ENROLL_SSH }}
+        run: python3 tools/enroll-admin.py pins

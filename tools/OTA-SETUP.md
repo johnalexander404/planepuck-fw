@@ -191,11 +191,11 @@ prints/targets device codes) moved to a **private** ops repo — see [`ops/READM
   `fleet-sync-channels`. Each runs `tools/fleet.py` (checked out from this public repo) against the broker
   with the MQTT operator secrets from that repo's vault, showing only its own inputs. `fleet-list` prints
   full codes — fine, the logs are private. Copy the templates + set secrets per [`ops/README.md`](ops/README.md).
-- **enroll-admin** (private `planepuck-ops` repo, *separate* workflow) → *Run workflow*: `command` =
-  `pins` / `unpin`. Runs `tools/enroll-admin.py` and edits the droplet's enroll key-pin store over
-  **SSH** (not MQTT) — it needs `ENROLL_SSH` + `ENROLL_SSH_KEY` secrets, NOT the MQTT operator account.
-  Split out so the fleet workflow never carries an SSH key. `unpin <code>` lets a factory-reset/erased
-  puck re-enroll (see Security model below).
+- **enroll-pins / enroll-unpin** (private `planepuck-ops` repo, *separate* workflows) → run
+  `tools/enroll-admin.py` and edit the droplet's enroll key-pin store over **SSH** (not MQTT) — they need
+  `ENROLL_SSH` + `ENROLL_SSH_KEY` secrets, NOT the MQTT operator account, so they're split off from the
+  fleet workflows (which never carry an SSH key). `enroll-pins` lists pinned codes; `enroll-unpin <code>`
+  lets a factory-reset/erased puck re-enroll (see Security model below).
 
 ### Staged release candidates (test before promoting to the fleet)
 A normal cut above is a **final** — it moves the fleet's `version.json` to the new version, so every

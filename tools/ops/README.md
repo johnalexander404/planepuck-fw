@@ -7,7 +7,7 @@ are MQTT usernames. On a public repo, Actions logs (and artifacts) are world-rea
 | Repo | Visibility | Does |
 |---|---|---|
 | `planepuck-fw` (firmware) | **public** | builds every board (`release.yml` matrix), publishes OTA artifacts, and the **leak-safe** build-time nudges (final broadcast, RC→test push, `--quiet` so no codes hit the log) |
-| `planepuck-ops` (this) | **private** | interactive fleet management — **one workflow per action** (`fleet-list` / `fleet-send` / `fleet-channel` / `fleet-broadcast` / `fleet-sync-channels`) + `enroll-admin` for pin recovery — private logs, so full codes are fine. Also the home for a future web-FE backend |
+| `planepuck-ops` (this) | **private** | interactive fleet management — **one workflow per action** (`fleet-list` / `fleet-send` / `fleet-channel` / `fleet-broadcast` / `fleet-sync-channels`) + `enroll-pins` / `enroll-unpin` for key-pin recovery — private logs, so full codes are fine. Also the home for a future web-FE backend |
 
 The tools (`fleet.py`, `enroll-admin.py`) stay in the **public** repo (they hold no secrets — creds come
 from env). These private workflows check them out from there, so the CLIs never need syncing — but the
@@ -18,8 +18,8 @@ workflow *files* do: re-copy the `tools/ops/*.yml` you use when they change upst
 2. Copy the per-action workflow files you want from [`tools/ops/`](.) → `.github/workflows/` in it —
    each is **one focused action** showing only the inputs it needs:
    `fleet-list.yml`, `fleet-send.yml`, `fleet-channel.yml`, `fleet-broadcast.yml`,
-   `fleet-sync-channels.yml`, and `enroll-admin.yml` (separate creds — see its section below). If you
-   forked the firmware repo, edit each file's `repository:` line to your fork.
+   `fleet-sync-channels.yml`, and `enroll-pins.yml` / `enroll-unpin.yml` (separate creds — see their
+   section below). If you forked the firmware repo, edit each file's `repository:` line to your fork.
 3. Add repo **secrets** (Settings → Secrets and variables → Actions):
    - `MQTT_HOST` — broker domain (e.g. `mqtt.example.com`)
    - `MQTT_OPERATOR_USER` / `MQTT_OPERATOR_PASS` — the `ota-operator` account
@@ -42,15 +42,17 @@ Locally you can run the same CLI directly: `tools/fleet.py list` / `send` / `cha
 `sync-channels` (set `FLEET_HOST`/`FLEET_USER`/`FLEET_PASS`, `FLEET_CAFILE=/etc/ssl/cert.pem` on macOS),
 and `fleet.py list --json` / `send --json` for machine-readable output — the basis for a future dashboard.
 
-## Enroll pin admin (separate workflow + tool)
-Managing the enroll **key-pin store** (`pins` / `unpin`) is split into its own tool (`enroll-admin.py`)
-and workflow (`enroll-admin.yml`) because it needs **droplet SSH**, not the MQTT operator account — a
-different and more powerful credential. The split keeps `fleet.yml` free of any SSH key.
+## Enroll pin admin (separate tool + workflows)
+Managing the enroll **key-pin store** uses its own tool (`enroll-admin.py`) and its own per-action
+workflows (`enroll-pins`, `enroll-unpin`) because it needs **droplet SSH**, not the MQTT operator account
+— a different and more powerful credential. Keeping it separate means the fleet workflows never carry an
+SSH key.
 
-1. Copy [`enroll-admin.yml`](./enroll-admin.yml) → `.github/workflows/enroll-admin.yml`.
+1. Copy [`enroll-pins.yml`](./enroll-pins.yml) and/or [`enroll-unpin.yml`](./enroll-unpin.yml) →
+   `.github/workflows/`.
 2. Add secrets: `ENROLL_SSH` = `user@droplet` (root or a NOPASSWD sudoer that can run `python3`) and
    `ENROLL_SSH_KEY` = a private key authorized for that user.
-3. Actions → **enroll-admin** → Run workflow → `pins`, or `unpin` with the device `code`.
+3. Actions → **enroll-pins** (no inputs — lists pinned codes) or **enroll-unpin** (`code` input).
 
 `unpin <code>` clears a code's pin so a factory-reset/erased puck (which regenerated its key → 403 key
 mismatch) can re-enroll on its next connect. Locally: `ENROLL_SSH=root@droplet tools/enroll-admin.py pins`
