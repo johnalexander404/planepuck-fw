@@ -7,12 +7,11 @@ are MQTT usernames. On a public repo, Actions logs (and artifacts) are world-rea
 | Repo | Visibility | Does |
 |---|---|---|
 | `planepuck-fw` (firmware) | **public** | builds every board (`release.yml` matrix), publishes OTA artifacts, and the **leak-safe** build-time nudges (final broadcast, RC→test push, `--quiet` so no codes hit the log) |
-| `planepuck-ops` (this) | **private** | interactive fleet management via `fleet.yml` — private logs, so full codes are fine. Also the home for a future web-FE backend |
+| `planepuck-ops` (this) | **private** | interactive fleet management via `fleet.yml` (+ `enroll-admin.yml` for pin recovery) — private logs, so full codes are fine. Also the home for a future web-FE backend |
 
-`fleet.py` itself stays in the **public** repo (it holds no secrets — creds come from env). This private
-workflow checks it out from there, so the CLI never needs syncing. (The workflow *file* does: when
-`tools/ops/fleet.yml` changes upstream — e.g. the new `pins`/`unpin` commands — re-copy it into this
-repo's `.github/workflows/fleet.yml`.)
+The tools (`fleet.py`, `enroll-admin.py`) stay in the **public** repo (they hold no secrets — creds come
+from env). These private workflows check them out from there, so the CLIs never need syncing — but the
+workflow *files* do: re-copy `fleet.yml` / `enroll-admin.yml` here when they change upstream.
 
 ## One-time setup
 1. Create a **private** repo, e.g. `planepuck-ops`.
@@ -22,9 +21,6 @@ repo's `.github/workflows/fleet.yml`.)
    - `MQTT_HOST` — broker domain (e.g. `mqtt.example.com`)
    - `MQTT_OPERATOR_USER` / `MQTT_OPERATOR_PASS` — the `ota-operator` account
    - `FLEET_GROUPS` *(optional)* — `{"test":["<code>",…]}`, only for the `sync-channels` bulk helper
-   - `FLEET_SSH` / `FLEET_SSH_KEY` *(optional)* — only for `pins`/`unpin`: `user@droplet` (root or a
-     NOPASSWD sudoer) + a private SSH key authorized there. These edit the droplet's enroll key-pin
-     store over **SSH** (not MQTT), so they need droplet access, not the operator MQTT account.
 4. The operator account needs the ACLs from [`../OTA-SETUP.md`](../OTA-SETUP.md) §3:
    `topic read fleet/#`, `topic write fleet/ota/+`, `topic write fleet/channel/+`, `topic write puck/all/ota`.
 
@@ -38,14 +34,29 @@ Actions → **fleet** → **Run workflow**, pick a `command`:
 - **broadcast** — nudge the whole fleet to recheck the manifest.
 - **sync-channels** — bulk-set from the `FLEET_GROUPS` secret: mark every `test` code `test` and demote
   any other reporting device to `prod`. Edit the secret + re-run to change membership.
-- **pins** — list TOFU-pinned device codes + counters (reads the droplet enroll pin store over SSH).
-- **unpin** — `target` = device code; clears its enroll pin so a factory-reset/erased puck (new key →
-  403 key mismatch) can re-enroll on its next connect. Needs the `FLEET_SSH`/`FLEET_SSH_KEY` secrets.
 
 Locally you can run the same tool directly: `tools/fleet.py list` / `send` / `channel` / `broadcast`
-(set `FLEET_HOST`/`FLEET_USER`/`FLEET_PASS`, `FLEET_CAFILE=/etc/ssl/cert.pem` on macOS), plus
-`FLEET_SSH=user@droplet tools/fleet.py pins` / `unpin <code>` for the enroll pin store, and
+(set `FLEET_HOST`/`FLEET_USER`/`FLEET_PASS`, `FLEET_CAFILE=/etc/ssl/cert.pem` on macOS), and
 `fleet.py list --json` / `send --json` for machine-readable output — the basis for a future dashboard.
+
+## Enroll pin admin (separate workflow + tool)
+Managing the enroll **key-pin store** (`pins` / `unpin`) is split into its own tool (`enroll-admin.py`)
+and workflow (`enroll-admin.yml`) because it needs **droplet SSH**, not the MQTT operator account — a
+different and more powerful credential. The split keeps `fleet.yml` free of any SSH key.
+
+1. Copy [`enroll-admin.yml`](./enroll-admin.yml) → `.github/workflows/enroll-admin.yml`.
+2. Add secrets: `ENROLL_SSH` = `user@droplet` (root or a NOPASSWD sudoer that can run `python3`) and
+   `ENROLL_SSH_KEY` = a private key authorized for that user.
+3. Actions → **enroll-admin** → Run workflow → `pins`, or `unpin` with the device `code`.
+
+`unpin <code>` clears a code's pin so a factory-reset/erased puck (which regenerated its key → 403 key
+mismatch) can re-enroll on its next connect. Locally: `ENROLL_SSH=root@droplet tools/enroll-admin.py pins`
+/ `unpin <code>`.
+
+> Heads-up: an SSH key with root/sudo on the droplet is far more powerful than the ACL-confined MQTT
+> operator account. For a rare recovery action, prefer running `enroll-admin.py` **locally**; only wire
+> the CI secrets if you need remote operators — ideally with a `command="…"` forced-command (or scoped
+> sudoers) restricting that key to just the pin-store edit.
 
 ## Future frontend
 The FE's backend lives here (or alongside): it imports `fleet.py` (`fetch_fleet` / `resolve` /

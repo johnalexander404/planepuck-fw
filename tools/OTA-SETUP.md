@@ -187,10 +187,14 @@ prints/targets device codes) moved to a **private** ops repo — see [`ops/READM
   broadcast + the board-chooser installer page). RC-gated exactly like a pushed tag. Equivalent to
   `tools/release.sh [rc] [version] "notes"`. CLI: `gh workflow run release -f version=18 -f rc=true -f notes=…`.
 - **fleet** (private `planepuck-ops` repo) → *Run workflow*: `command` = `list` / `send` / `channel` /
-  `broadcast` / `sync-channels` / `pins` / `unpin`. Runs `tools/fleet.py` (checked out from this public
-  repo) against the broker with the operator secrets from that repo's vault (`pins`/`unpin` instead SSH
-  the droplet's enroll pin store — they need `FLEET_SSH`/`FLEET_SSH_KEY`). `list` prints full codes —
-  fine, the logs are private. Copy the template + set secrets per [`ops/README.md`](ops/README.md).
+  `broadcast` / `sync-channels`. Runs `tools/fleet.py` (checked out from this public repo) against the
+  broker with the MQTT operator secrets from that repo's vault. `list` prints full codes — fine, the
+  logs are private. Copy the template + set secrets per [`ops/README.md`](ops/README.md).
+- **enroll-admin** (private `planepuck-ops` repo, *separate* workflow) → *Run workflow*: `command` =
+  `pins` / `unpin`. Runs `tools/enroll-admin.py` and edits the droplet's enroll key-pin store over
+  **SSH** (not MQTT) — it needs `ENROLL_SSH` + `ENROLL_SSH_KEY` secrets, NOT the MQTT operator account.
+  Split out so the fleet workflow never carries an SSH key. `unpin <code>` lets a factory-reset/erased
+  puck re-enroll (see Security model below).
 
 ### Staged release candidates (test before promoting to the fleet)
 A normal cut above is a **final** — it moves the fleet's `version.json` to the new version, so every
@@ -406,12 +410,16 @@ The server pins `{key, ctr}` per friend code on the **first** enroll; afterwards
 - **Replay**: the strictly-increasing `ctr` rejects a replayed signed request (HTTPS already prevents capture).
 - **Re-flash / full-erase recovery**: OTA and a normal USB app-flash keep NVS, so `K` survives and the puck
   reconnects with no re-enroll. A full `erase_flash` wipes `K` → the device makes a new `K` → the server sees
-  a **key mismatch** for the pinned code and returns **403**. Run the **unpin** below, then it re-TOFUs on its
-  next connect cycle:
+  a **key mismatch** for the pinned code and returns **403**. **Unpin** the code, then it re-TOFUs on its
+  next connect cycle. Easiest is the dedicated tool (over SSH, from your machine or the `enroll-admin`
+  workflow):
   ```bash
-  # list pinned codes:
+  ENROLL_SSH=root@<droplet> tools/enroll-admin.py pins            # list pinned codes
+  ENROLL_SSH=root@<droplet> tools/enroll-admin.py unpin 00F93030  # clear one
+  ```
+  Or directly on the droplet, with no tooling:
+  ```bash
   sudo python3 -c "import json;print('\n'.join(json.load(open('/etc/planepuck/enroll-keys.json'))))"
-  # unpin ONE code (replace 00F93030) so an erased/re-flashed puck can re-pin:
   sudo python3 - <<'EOF'
   import json,os; f="/etc/planepuck/enroll-keys.json"
   p=json.load(open(f)); p.pop("00F93030",None)

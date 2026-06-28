@@ -40,8 +40,6 @@ Examples:
   tools/fleet.py send test 18 --board m5cores3 # CoreS3 devices on the 'test' kind
   tools/fleet.py channel 00F93030 test         # mark a device's kind (retained)
   tools/fleet.py broadcast 18                  # nudge the whole fleet to recheck the manifest
-  tools/fleet.py pins                          # list TOFU-pinned codes  (over SSH; needs FLEET_SSH=user@droplet)
-  tools/fleet.py unpin 00F93030                # clear a pin so a factory-reset/erased puck can re-enroll
 
 The module is import-friendly: `fetch_fleet(conn, wait)`, `resolve(dev, target, board)`, and
 `publish_ota(conn, codes, version, force)` take plain args and return data (a future FE backend reuses
@@ -244,67 +242,6 @@ def cmd_sync_channels(a):
     print(f"-> channels synced: {n_test} test, {n_prod} prod (retained; new/offline non-test devices default to prod).")
 
 
-# ---- enroll pin store (lives on the droplet, not MQTT — reached over SSH) -------------------------
-# The TOFU key-pin store (/etc/planepuck/enroll-keys.json) maps friend code -> {key,ctr}. `unpin` is
-# the recovery for a factory-reset/erased puck: it generated a NEW key, so the server 403s the
-# key-mismatch until the old pin is removed; then the puck re-TOFUs on its next connect.
-DEF_PIN_FILE = "/etc/planepuck/enroll-keys.json"
-
-_PIN_LIST = r'''import json,sys
-try: p=json.load(open(sys.argv[1]))
-except FileNotFoundError: p={}
-for c in sorted(p): print(c+"\t"+str(p[c].get("ctr","?")))
-'''
-_PIN_UNPIN = r'''import json,os,sys
-f=sys.argv[1]; code=sys.argv[2].upper()
-try: p=json.load(open(f))
-except FileNotFoundError: p={}
-if code not in p: print("NOTFOUND"); sys.exit(0)
-p.pop(code)
-t=f+".tmp.%d"%os.getpid()
-with os.fdopen(os.open(t,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600),"w") as g: json.dump(p,g)
-os.replace(t,f); print("UNPINNED")
-'''
-
-def _ssh_target(a):
-    t = getattr(a, "ssh", "") or os.environ.get("FLEET_SSH", "")
-    if not t:
-        sys.exit("error: no SSH target — the pin store lives on the droplet, not MQTT. "
-                 "Set FLEET_SSH=user@droplet (root, or a sudoer with NOPASSWD python3) or pass --ssh.")
-    return t
-
-def _ssh_run(a, remote_cmd, stdin_script):
-    require("ssh")
-    r = subprocess.run(["ssh", "-T", _ssh_target(a), remote_cmd],
-                       input=stdin_script, text=True, capture_output=True)
-    if r.returncode != 0:
-        sys.exit(r.stderr.strip() or f"ssh failed ({r.returncode})")
-    return r.stdout
-
-
-def cmd_pins(a):
-    out = _ssh_run(a, f"sudo python3 - {a.pin_file}", _PIN_LIST)
-    rows = [l for l in out.splitlines() if l.strip()]
-    if not rows:
-        print("no pinned codes (pin store empty or absent)."); return
-    print(f"{'CODE':<10} CTR")
-    for l in rows:
-        c, _, ctr = l.partition("\t"); print(f"{c:<10} {ctr}")
-    print(f"\n{len(rows)} pinned.")
-
-
-def cmd_unpin(a):
-    if not HEX8.match(a.code): sys.exit(f"'{a.code}' is not an 8-hex device code")
-    code = a.code.upper()
-    out = _ssh_run(a, f"sudo python3 - {a.pin_file} {code}", _PIN_UNPIN).strip()
-    if out == "UNPINNED":
-        print(f"-> unpinned {code} — the puck re-TOFUs (re-pins a fresh key) on its next connect (~3s).")
-    elif out == "NOTFOUND":
-        print(f"-> {code} was not pinned (nothing to do).")
-    else:
-        print(out or "done")
-
-
 def main():
     p = argparse.ArgumentParser(description="PlanePuck fleet CLI")
     p.add_argument("--host", default=os.environ.get("FLEET_HOST", DEF_HOST))
@@ -349,18 +286,8 @@ def main():
     psc.add_argument("--wait", type=int, default=3, help="seconds to collect telemetry (to demote non-test to prod)")
     psc.set_defaults(fn=cmd_sync_channels)
 
-    for sp in (sub.add_parser("pins", help="list TOFU-pinned device codes (reads the droplet pin store over SSH)"),
-               sub.add_parser("unpin", help="remove a code's pin so a factory-reset/erased puck can re-enroll")):
-        is_unpin = sp.prog.endswith("unpin")
-        if is_unpin: sp.add_argument("code", help="8-hex device code to unpin")
-        sp.add_argument("--ssh", default=os.environ.get("FLEET_SSH", ""),
-                        help="user@droplet for the pin store (else FLEET_SSH env); root or NOPASSWD sudoer")
-        sp.add_argument("--pin-file", default=os.environ.get("FLEET_PIN_FILE", DEF_PIN_FILE),
-                        help=f"pin-store path on the droplet (default {DEF_PIN_FILE})")
-        sp.set_defaults(fn=cmd_unpin if is_unpin else cmd_pins)
-
     a = p.parse_args()
-    if a.cmd not in ("pins", "unpin") and not a.host:   # pins/unpin go over SSH, not the broker
+    if not a.host:
         sys.exit("error: no broker host — set the FLEET_HOST env var or pass --host <broker-domain>")
     a.fn(a)
 
