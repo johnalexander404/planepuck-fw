@@ -379,8 +379,10 @@ sudo usermod -aG mosquitto puckenroll            # write the (group-writable) pa
 sudo visudo -f /etc/sudoers.d/planepuck-enroll   # add the line below:
 #   puckenroll ALL=(root) NOPASSWD: /usr/bin/systemctl reload mosquitto
 ```
-Then in the unit set `User=puckenroll`, `Environment=PLANEPUCK_RELOAD_CMD=sudo systemctl reload
-mosquitto`, and change `ReadWritePaths=/etc/mosquitto` to the passwd file as needed.
+Then in the unit set `User=puckenroll`, `Environment="PLANEPUCK_RELOAD_CMD=sudo systemctl reload
+mosquitto"` (quote the WHOLE NAME=VALUE — systemd splits `Environment=` on spaces, so an unquoted value
+keeps only `sudo` and the broker never reloads → silent enroll, every login fails MQTT state=5), and
+change `ReadWritePaths=/etc/mosquitto` to the passwd file as needed.
 
 ## Security model (read this)
 - The token only authorizes **enrollment** (set the password for a friend code) — nothing else. It is

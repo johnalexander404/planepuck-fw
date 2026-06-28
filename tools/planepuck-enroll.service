@@ -10,7 +10,11 @@ Wants=mosquitto.service
 # mosquitto", grant a tight sudoers rule, and make the passwd file group-writable — see OTA-SETUP.md.
 User=root
 Environment=PLANEPUCK_PASSWD_FILE=/etc/mosquitto/passwd
-Environment=PLANEPUCK_RELOAD_CMD=systemctl reload mosquitto
+# QUOTE the whole NAME=VALUE: systemd splits Environment= on spaces, so an UNQUOTED value here keeps
+# only "systemctl" and drops "reload mosquitto" -> enroll-server.py runs bare `systemctl` (exits 0, a
+# silent no-op), reports enroll success, but the broker never reloads the new password -> every login
+# fails with MQTT state=5. The quotes preserve the full command.
+Environment="PLANEPUCK_RELOAD_CMD=systemctl reload mosquitto"
 Environment=PLANEPUCK_BIND=127.0.0.1:8090
 # The enroll token is the ONLY secret — keep it out of this unit; put it in a root-only env file:
 #   /etc/planepuck/enroll.env   ->   PLANEPUCK_ENROLL_TOKEN=<same value as ENROLL_TOKEN in config.h>
