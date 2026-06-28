@@ -187,9 +187,10 @@ prints/targets device codes) moved to a **private** ops repo — see [`ops/READM
   broadcast + the board-chooser installer page). RC-gated exactly like a pushed tag. Equivalent to
   `tools/release.sh [rc] [version] "notes"`. CLI: `gh workflow run release -f version=18 -f rc=true -f notes=…`.
 - **fleet** (private `planepuck-ops` repo) → *Run workflow*: `command` = `list` / `send` / `channel` /
-  `broadcast`. Runs `tools/fleet.py` (checked out from this public repo) against the broker with the
-  operator secrets from that repo's vault. `list` prints full codes — fine, the logs are private. Copy
-  the template + set secrets per [`ops/README.md`](ops/README.md).
+  `broadcast` / `sync-channels` / `pins` / `unpin`. Runs `tools/fleet.py` (checked out from this public
+  repo) against the broker with the operator secrets from that repo's vault (`pins`/`unpin` instead SSH
+  the droplet's enroll pin store — they need `FLEET_SSH`/`FLEET_SSH_KEY`). `list` prints full codes —
+  fine, the logs are private. Copy the template + set secrets per [`ops/README.md`](ops/README.md).
 
 ### Staged release candidates (test before promoting to the fleet)
 A normal cut above is a **final** — it moves the fleet's `version.json` to the new version, so every

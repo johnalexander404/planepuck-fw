@@ -5,21 +5,27 @@ name: fleet
 # Copy this file to `.github/workflows/fleet.yml` in a PRIVATE repo (e.g. `planepuck-ops`). Its Actions
 # logs print device codes (MQTT usernames), so it MUST live in a private repo — never in the public
 # firmware repo. It pulls tools/fleet.py from the PUBLIC firmware repo (no code duplication) and runs it
-# with operator MQTT secrets from THIS repo's vault. See tools/ops/README.md.
+# with operator secrets from THIS repo's vault. See tools/ops/README.md.
 #
-# Required secrets in THIS (private) repo:  MQTT_HOST, MQTT_OPERATOR_USER, MQTT_OPERATOR_PASS
-# Optional:                                 FLEET_GROUPS (only for the `sync-channels` bulk helper)
+# Required secrets in THIS (private) repo:
+#   MQTT commands (list / send / channel / broadcast / sync-channels):
+#     MQTT_HOST, MQTT_OPERATOR_USER, MQTT_OPERATOR_PASS   (+ optional FLEET_GROUPS for sync-channels)
+#   Pin commands (pins / unpin — these SSH to the droplet's TOFU key-pin store, NOT MQTT):
+#     FLEET_SSH       = user@droplet  (root, or a NOPASSWD sudoer that can run python3)
+#     FLEET_SSH_KEY   = a private SSH key authorized on that droplet user
+#   `unpin <code>` clears a code's enroll pin so a factory-reset/erased puck (new key -> 403 key mismatch)
+#   can re-enroll; `pins` lists pinned codes. See tools/OTA-SETUP.md "Security model".
 on:
   workflow_dispatch:
     inputs:
       command:
-        description: 'list | send | channel | broadcast | sync-channels'
+        description: 'list | send | channel | broadcast | sync-channels | pins | unpin'
         type: choice
-        options: [list, send, channel, broadcast, sync-channels]
+        options: [list, send, channel, broadcast, sync-channels, pins, unpin]
         default: list
         required: true
       target:
-        description: 'send: device CODE | all | kind (test/prod/xyz)   ·   channel: device CODE'
+        description: 'send: device CODE | all | kind   ·   channel: device CODE   ·   unpin: device CODE'
         required: false
       board:
         description: 'list/send filter: board id (e.g. m5cores3, waveshare_1_85c_box)'
@@ -48,6 +54,21 @@ jobs:
           repository: johnalexander404/planepuck-fw   # <- change if you forked the firmware repo
           sparse-checkout: tools
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+
+      - name: Set up droplet SSH (pins / unpin only)
+        if: ${{ inputs.command == 'pins' || inputs.command == 'unpin' }}
+        env:
+          FLEET_SSH: ${{ secrets.FLEET_SSH }}
+          FLEET_SSH_KEY: ${{ secrets.FLEET_SSH_KEY }}
+        run: |
+          if [ -z "${FLEET_SSH:-}" ] || [ -z "${FLEET_SSH_KEY:-}" ]; then
+            echo "::error::pins/unpin need FLEET_SSH (user@droplet) + FLEET_SSH_KEY secrets in THIS repo"; exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$FLEET_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${FLEET_SSH##*@}" >> ~/.ssh/known_hosts 2>/dev/null
+
       - name: fleet.py ${{ inputs.command }}
         env:
           FLEET_HOST: ${{ secrets.MQTT_HOST }}
@@ -55,6 +76,7 @@ jobs:
           FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
           FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
           FLEET_GROUPS: ${{ secrets.FLEET_GROUPS }}
+          FLEET_SSH: ${{ secrets.FLEET_SSH }}
           CMD: ${{ inputs.command }}
           TARGET: ${{ inputs.target }}
           BOARD: ${{ inputs.board }}
@@ -62,26 +84,34 @@ jobs:
           VERSION: ${{ inputs.version }}
           FORCE: ${{ inputs.force }}
         run: |
-          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ]; then
-            echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets in THIS repo"; exit 1
-          fi
-          BF=(); [ -n "$BOARD" ] && BF=(--board "$BOARD")
           case "$CMD" in
-            list)
-              KF=(); [ -n "$KIND" ] && KF=(--kind "$KIND")
-              python3 tools/fleet.py list "${BF[@]}" "${KF[@]}" ;;   # private logs -> full codes OK
-            send)
-              if [ -z "$TARGET" ] || [ -z "$VERSION" ]; then echo "::error::send needs target + version"; exit 1; fi
-              A=(send "$TARGET" "$VERSION" "${BF[@]}"); [ "$FORCE" = "true" ] && A+=(--force)
-              python3 tools/fleet.py "${A[@]}" ;;
-            channel)
-              if [ -z "$TARGET" ] || [ -z "$KIND" ]; then echo "::error::channel needs target (code) + kind"; exit 1; fi
-              python3 tools/fleet.py channel "$TARGET" "$KIND" ;;
-            broadcast)
-              if [ -z "$VERSION" ]; then echo "::error::broadcast needs version"; exit 1; fi
-              python3 tools/fleet.py broadcast "$VERSION" ;;
-            sync-channels)
-              if [ -z "${FLEET_GROUPS:-}" ]; then echo "::error::sync-channels needs the FLEET_GROUPS secret"; exit 1; fi
-              python3 tools/fleet.py sync-channels ;;   # bulk-set the 'test' allow-list as retained markers
-            *) echo "::error::unknown command '$CMD'"; exit 1 ;;
+            pins)                                                # SSH to the droplet pin store (no MQTT)
+              python3 tools/fleet.py pins ;;
+            unpin)
+              if [ -z "$TARGET" ]; then echo "::error::unpin needs target (device CODE)"; exit 1; fi
+              python3 tools/fleet.py unpin "$TARGET" ;;
+            *)
+              if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ]; then
+                echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets in THIS repo"; exit 1
+              fi
+              BF=(); [ -n "$BOARD" ] && BF=(--board "$BOARD")
+              case "$CMD" in
+                list)
+                  KF=(); [ -n "$KIND" ] && KF=(--kind "$KIND")
+                  python3 tools/fleet.py list "${BF[@]}" "${KF[@]}" ;;   # private logs -> full codes OK
+                send)
+                  if [ -z "$TARGET" ] || [ -z "$VERSION" ]; then echo "::error::send needs target + version"; exit 1; fi
+                  A=(send "$TARGET" "$VERSION" "${BF[@]}"); [ "$FORCE" = "true" ] && A+=(--force)
+                  python3 tools/fleet.py "${A[@]}" ;;
+                channel)
+                  if [ -z "$TARGET" ] || [ -z "$KIND" ]; then echo "::error::channel needs target (code) + kind"; exit 1; fi
+                  python3 tools/fleet.py channel "$TARGET" "$KIND" ;;
+                broadcast)
+                  if [ -z "$VERSION" ]; then echo "::error::broadcast needs version"; exit 1; fi
+                  python3 tools/fleet.py broadcast "$VERSION" ;;
+                sync-channels)
+                  if [ -z "${FLEET_GROUPS:-}" ]; then echo "::error::sync-channels needs the FLEET_GROUPS secret"; exit 1; fi
+                  python3 tools/fleet.py sync-channels ;;
+                *) echo "::error::unknown command '$CMD'"; exit 1 ;;
+              esac ;;
           esac
