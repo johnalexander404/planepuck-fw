@@ -1,0 +1,37 @@
+name: fleet-broadcast
+
+# Nudge the WHOLE fleet to recheck the manifest (retained). Each device resolves its own board's bin.
+# One of the per-action PlanePuck ops workflows — copy to `.github/workflows/fleet-broadcast.yml`.
+# Secrets: MQTT_HOST, MQTT_OPERATOR_USER, MQTT_OPERATOR_PASS.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'firmware version integer (the recheck nudge payload)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  broadcast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: johnalexander404/planepuck-fw   # <- change if you forked the firmware repo
+          sparse-checkout: tools
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+      - name: fleet.py broadcast
+        env:
+          FLEET_HOST: ${{ secrets.MQTT_HOST }}
+          FLEET_PORT: '8883'
+          FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ]; then
+            echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets in THIS repo"; exit 1
+          fi
+          if [ -z "$VERSION" ]; then echo "::error::broadcast needs version"; exit 1; fi
+          python3 tools/fleet.py broadcast "$VERSION"

@@ -7,37 +7,40 @@ are MQTT usernames. On a public repo, Actions logs (and artifacts) are world-rea
 | Repo | Visibility | Does |
 |---|---|---|
 | `planepuck-fw` (firmware) | **public** | builds every board (`release.yml` matrix), publishes OTA artifacts, and the **leak-safe** build-time nudges (final broadcast, RC→test push, `--quiet` so no codes hit the log) |
-| `planepuck-ops` (this) | **private** | interactive fleet management via `fleet.yml` (+ `enroll-admin.yml` for pin recovery) — private logs, so full codes are fine. Also the home for a future web-FE backend |
+| `planepuck-ops` (this) | **private** | interactive fleet management — **one workflow per action** (`fleet-list` / `fleet-send` / `fleet-channel` / `fleet-broadcast` / `fleet-sync-channels`) + `enroll-admin` for pin recovery — private logs, so full codes are fine. Also the home for a future web-FE backend |
 
 The tools (`fleet.py`, `enroll-admin.py`) stay in the **public** repo (they hold no secrets — creds come
 from env). These private workflows check them out from there, so the CLIs never need syncing — but the
-workflow *files* do: re-copy `fleet.yml` / `enroll-admin.yml` here when they change upstream.
+workflow *files* do: re-copy the `tools/ops/*.yml` you use when they change upstream.
 
 ## One-time setup
 1. Create a **private** repo, e.g. `planepuck-ops`.
-2. Copy [`fleet.yml`](./fleet.yml) → `.github/workflows/fleet.yml` in it. If you forked the firmware
-   repo, edit the `repository:` line to your fork.
+2. Copy the per-action workflow files you want from [`tools/ops/`](.) → `.github/workflows/` in it —
+   each is **one focused action** showing only the inputs it needs:
+   `fleet-list.yml`, `fleet-send.yml`, `fleet-channel.yml`, `fleet-broadcast.yml`,
+   `fleet-sync-channels.yml`, and `enroll-admin.yml` (separate creds — see its section below). If you
+   forked the firmware repo, edit each file's `repository:` line to your fork.
 3. Add repo **secrets** (Settings → Secrets and variables → Actions):
    - `MQTT_HOST` — broker domain (e.g. `mqtt.example.com`)
    - `MQTT_OPERATOR_USER` / `MQTT_OPERATOR_PASS` — the `ota-operator` account
-   - `FLEET_GROUPS` *(optional)* — `{"test":["<code>",…]}`, only for the `sync-channels` bulk helper
+   - `FLEET_GROUPS` *(optional)* — `{"test":["<code>",…]}`, only for `fleet-sync-channels`
 4. The operator account needs the ACLs from [`../OTA-SETUP.md`](../OTA-SETUP.md) §3:
    `topic read fleet/#`, `topic write fleet/ota/+`, `topic write fleet/channel/+`, `topic write puck/all/ota`.
 
 ## Use
-Actions → **fleet** → **Run workflow**, pick a `command`:
-- **list** — fleet table (`--board` / `--kind` filters). Codes shown (private log).
-- **send** — `target` = a device code, `all`, or a kind (`test`/`prod`/`xyz`); optional `board` filter +
-  `force`. Each device resolves its own board's bin, so a push is board-safe.
-- **channel** — set a device's `kind` (`target` = code, `kind` = label). `test`/`beta` see all builds;
-  any other kind sees released only.
-- **broadcast** — nudge the whole fleet to recheck the manifest.
-- **sync-channels** — bulk-set from the `FLEET_GROUPS` secret: mark every `test` code `test` and demote
-  any other reporting device to `prod`. Edit the secret + re-run to change membership.
+Each action is its **own** entry in the Actions sidebar (Run workflow → only that action's inputs):
+- **fleet-list** — fleet table; optional `board` / `kind` filters. Codes shown (private log).
+- **fleet-send** — install a version: `target` = device code | `all` | kind; `version`; optional `board`
+  + `force`. Each device resolves its own board's bin, so a push is board-safe.
+- **fleet-channel** — set one device's `kind` (`code` + `kind`). `test`/`beta` see all builds; any other
+  kind sees released only.
+- **fleet-broadcast** — nudge the whole fleet to recheck the manifest (`version`).
+- **fleet-sync-channels** — bulk-set from the `FLEET_GROUPS` secret: mark every `test` code `test` and
+  demote any other reporting device to `prod`. Edit the secret + re-run to change membership.
 
-Locally you can run the same tool directly: `tools/fleet.py list` / `send` / `channel` / `broadcast`
-(set `FLEET_HOST`/`FLEET_USER`/`FLEET_PASS`, `FLEET_CAFILE=/etc/ssl/cert.pem` on macOS), and
-`fleet.py list --json` / `send --json` for machine-readable output — the basis for a future dashboard.
+Locally you can run the same CLI directly: `tools/fleet.py list` / `send` / `channel` / `broadcast` /
+`sync-channels` (set `FLEET_HOST`/`FLEET_USER`/`FLEET_PASS`, `FLEET_CAFILE=/etc/ssl/cert.pem` on macOS),
+and `fleet.py list --json` / `send --json` for machine-readable output — the basis for a future dashboard.
 
 ## Enroll pin admin (separate workflow + tool)
 Managing the enroll **key-pin store** (`pins` / `unpin`) is split into its own tool (`enroll-admin.py`)

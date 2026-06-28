@@ -1,0 +1,44 @@
+name: fleet-list
+
+# Show the fleet (code / name / version / board / kind / status). One of the per-action PlanePuck ops
+# workflows — copy to `.github/workflows/fleet-list.yml` in your PRIVATE repo. Pulls tools/fleet.py from
+# the public firmware repo; runs it with the MQTT operator secrets. See tools/ops/README.md.
+# Secrets: MQTT_HOST, MQTT_OPERATOR_USER, MQTT_OPERATOR_PASS.
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'filter by board id (e.g. m5cores3, waveshare_1_85c_box) — optional'
+        required: false
+      kind:
+        description: 'filter by kind (test / prod / xyz) — optional'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: johnalexander404/planepuck-fw   # <- change if you forked the firmware repo
+          sparse-checkout: tools
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto-clients
+      - name: fleet.py list
+        env:
+          FLEET_HOST: ${{ secrets.MQTT_HOST }}
+          FLEET_PORT: '8883'
+          FLEET_USER: ${{ secrets.MQTT_OPERATOR_USER }}
+          FLEET_PASS: ${{ secrets.MQTT_OPERATOR_PASS }}
+          BOARD: ${{ inputs.board }}
+          KIND: ${{ inputs.kind }}
+        run: |
+          if [ -z "${FLEET_PASS:-}" ] || [ -z "${FLEET_HOST:-}" ]; then
+            echo "::error::set MQTT_HOST + MQTT_OPERATOR_USER + MQTT_OPERATOR_PASS secrets in THIS repo"; exit 1
+          fi
+          ARGS=(list)
+          [ -n "$BOARD" ] && ARGS+=(--board "$BOARD")
+          [ -n "$KIND" ]  && ARGS+=(--kind "$KIND")
+          python3 tools/fleet.py "${ARGS[@]}"          # private logs -> full codes OK

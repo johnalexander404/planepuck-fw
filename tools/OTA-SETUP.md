@@ -186,10 +186,11 @@ prints/targets device codes) moved to a **private** ops repo — see [`ops/READM
   runs (RC → auto-push to the `test` kind with `--quiet` so no codes hit the log; final → fleet
   broadcast + the board-chooser installer page). RC-gated exactly like a pushed tag. Equivalent to
   `tools/release.sh [rc] [version] "notes"`. CLI: `gh workflow run release -f version=18 -f rc=true -f notes=…`.
-- **fleet** (private `planepuck-ops` repo) → *Run workflow*: `command` = `list` / `send` / `channel` /
-  `broadcast` / `sync-channels`. Runs `tools/fleet.py` (checked out from this public repo) against the
-  broker with the MQTT operator secrets from that repo's vault. `list` prints full codes — fine, the
-  logs are private. Copy the template + set secrets per [`ops/README.md`](ops/README.md).
+- **fleet ops** (private `planepuck-ops` repo) → one workflow **per action** (clearer than a single
+  command dropdown): `fleet-list` / `fleet-send` / `fleet-channel` / `fleet-broadcast` /
+  `fleet-sync-channels`. Each runs `tools/fleet.py` (checked out from this public repo) against the broker
+  with the MQTT operator secrets from that repo's vault, showing only its own inputs. `fleet-list` prints
+  full codes — fine, the logs are private. Copy the templates + set secrets per [`ops/README.md`](ops/README.md).
 - **enroll-admin** (private `planepuck-ops` repo, *separate* workflow) → *Run workflow*: `command` =
   `pins` / `unpin`. Runs `tools/enroll-admin.py` and edits the droplet's enroll key-pin store over
   **SSH** (not MQTT) — it needs `ENROLL_SSH` + `ENROLL_SSH_KEY` secrets, NOT the MQTT operator account.
