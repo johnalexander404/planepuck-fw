@@ -17,8 +17,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>               // isdigit/isalnum for the weather geocoder query
-#include <esp_random.h>          // esp_random() — HW RNG for the self-enroll password
+#include <esp_random.h>          // esp_random() — HW RNG for the self-enroll password + per-device enroll key
 #include <esp_heap_caps.h>       // heap_caps_malloc(MALLOC_CAP_SPIRAM) — album-art JPEG buffer in PSRAM
+#include <mbedtls/md.h>          // HMAC-SHA256 — signs the self-enroll request (TOFU key-pin)
 #include "config.h"
 #include "services.h"
 #include "layout.h"
@@ -61,6 +62,15 @@ namespace Settings {
   // with the broker (enroll endpoint) once Wi-Fi is up, so both ends match without a manual step.
   bool mqttSyncPending() { return prefs.getBool("mqttsync", false); }
   void setMqttSyncPending(bool v) { prefs.putBool("mqttsync", v); }
+  // Per-device enroll key K (256-bit, hex) + monotonic counter for SIGNED self-enroll (TOFU key-pin).
+  // K is generated once on first boot and never leaves NVS except inside the (HTTPS-only) enroll POST
+  // body; the server pins it per friend code so only this device can ever change its MQTT password.
+  // Survives OTA + normal USB app-flash; only a full chip/NVS erase wipes it (then an operator unpin
+  // lets the device re-TOFU). See Broker::enrollKeyHex()/enrollPost().
+  String enrollKey() { return prefs.getString("enrkey", ""); }
+  void saveEnrollKey(const String& k) { prefs.putString("enrkey", k); }
+  uint32_t enrollCtr() { return prefs.getUInt("enrctr", 0); }
+  void saveEnrollCtr(uint32_t c) { prefs.putUInt("enrctr", c); }
   String finnhubKey() { String k = prefs.getString("fhkey", ""); return k.length() ? k : String(FINNHUB_API_KEY); }
   void saveFinnhubKey(const String& k) { prefs.putString("fhkey", k); }
   String spotifyRefresh() { return prefs.getString("sprt", ""); }   // Spotify OAuth refresh token (rotated by the service)
@@ -1997,15 +2007,70 @@ namespace Broker {
 
   static bool enrollConfigured() { return strlen(ENROLL_URL) > 0 && strlen(ENROLL_TOKEN) > 0; }
 
-  // Zero-touch provisioning: a fresh puck has no MQTT password. Generate a random one, register it
-  // with the droplet's enroll endpoint over HTTPS (CA-pinned to MQTT_CA_CERT, bearer = ENROLL_TOKEN),
-  // and store it in NVS so every future connect just uses it. One success ends enrollment forever
-  // (mqttPass() is non-empty afterwards). Runs on the connect task, off the UI thread.
-  // POST (code, pw) to the droplet's enroll endpoint -> it runs mosquitto_passwd + reloads, so the
-  // broker accepts this password for this device's username (= friend code). HTTPS, CA-pinned, bearer.
+  // --- Signed self-enroll (TOFU key-pin) helpers --------------------------------------------------
+  // Decode a 64-char hex string into 32 raw bytes; false on bad length/chars.
+  static bool hexToBytes32(const String& hex, uint8_t out[32]) {
+    if (hex.length() != 64) return false;
+    auto nib = [](char c) -> int {
+      if (c >= '0' && c <= '9') return c - '0';
+      if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+      if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+      return -1; };
+    for (int i = 0; i < 32; i++) {
+      int hi = nib(hex[i * 2]), lo = nib(hex[i * 2 + 1]);
+      if (hi < 0 || lo < 0) return false;
+      out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+  }
+  // HMAC-SHA256(K, msg) -> lowercase 64-hex. K is the 64-hex device key (keyed on its 32 raw bytes).
+  static String hmacHex(const String& keyHex, const String& msg) {
+    uint8_t key[32];
+    if (!hexToBytes32(keyHex, key)) return String();
+    uint8_t mac[32];
+    const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    mbedtls_md_context_t ctx; mbedtls_md_init(&ctx);
+    int rc = mbedtls_md_setup(&ctx, info, 1);                 // 1 = HMAC mode
+    if (rc == 0) rc = mbedtls_md_hmac_starts(&ctx, key, sizeof(key));
+    if (rc == 0) rc = mbedtls_md_hmac_update(&ctx, (const uint8_t*)msg.c_str(), msg.length());
+    if (rc == 0) rc = mbedtls_md_hmac_finish(&ctx, mac);
+    mbedtls_md_free(&ctx);
+    if (rc != 0) return String();
+    char hex[65];
+    for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", mac[i]);
+    hex[64] = '\0';
+    return String(hex);
+  }
+  // Lazily generate + persist the per-device 256-bit enroll key K (64-hex). esp_random() is a true HW
+  // RNG with the radio on (we only enroll while Net::online()), so it's adequate entropy for an HMAC key.
+  static String enrollKeyHex() {
+    String k = Settings::enrollKey();
+    if (k.length() == 64) return k;
+    char hex[65];
+    for (int i = 0; i < 8; i++) snprintf(hex + i * 8, 9, "%08x", (unsigned)esp_random());
+    hex[64] = '\0';
+    k = String(hex);
+    Settings::saveEnrollKey(k);
+    return k;
+  }
+
+  // Zero-touch provisioning: register an MQTT password for this device's friend code with the droplet's
+  // enroll endpoint over HTTPS (CA-pinned to MQTT_CA_CERT, bearer = ENROLL_TOKEN). The request is SIGNED
+  // with the per-device key K so the server can pin it (TOFU): after the first enroll, only the holder of
+  // K can ever change this code's password — the shared bearer token is just a coarse gate. The server
+  // runs mosquitto_passwd + reload, so the broker then accepts this password for username = friend code.
+  // Canonical signed message: code + "\n" + pw + "\n" + decimal(ctr). HTTPS only — K never leaves in clear.
   static bool enrollPost(const String& pw) {
-    String code = Friends::myCode();
-    String body = String("{\"code\":\"") + code + "\",\"pw\":\"" + pw + "\"}";
+    String code   = Friends::myCode();                   // uppercase 8-hex == MQTT username
+    String keyHex = enrollKeyHex();                       // lazily generated, persisted
+    uint32_t ctr  = Settings::enrollCtr() + 1;            // strictly-increasing; committed only on a 200
+    String msg = code + "\n" + pw + "\n" + String((unsigned long)ctr);
+    String sig = hmacHex(keyHex, msg);
+    if (!sig.length()) { log_e("[enroll] hmac failed"); return false; }
+    // Legacy {code,pw} fields kept so an un-upgraded server still works; new server uses key/ctr/sig.
+    String body = String("{\"code\":\"") + code + "\",\"pw\":\"" + pw +
+                  "\",\"ctr\":" + String((unsigned long)ctr) +
+                  ",\"key\":\"" + keyHex + "\",\"sig\":\"" + sig + "\"}";
     WiFiClientSecure tls; tls.setCACert(MQTT_CA_CERT); tls.setHandshakeTimeout(8);   // NEVER setInsecure
     HTTPClient http; http.setConnectTimeout(8000); http.setTimeout(10000);
     if (!http.begin(tls, ENROLL_URL)) { log_e("[enroll] http begin failed"); return false; }
@@ -2013,7 +2078,7 @@ namespace Broker {
     http.addHeader("Authorization", String("Bearer ") + ENROLL_TOKEN);
     int rc = http.POST(body);
     http.end();
-    if (rc == 200 || rc == 201) return true;
+    if (rc == 200 || rc == 201) { Settings::saveEnrollCtr(ctr); return true; }   // commit ctr on accept only
     log_e("[enroll] failed rc=%d", rc);             // USB-visible (Serial.printf only reaches UART0)
     Serial.printf("[enroll] failed code=%s rc=%d\n", code.c_str(), rc);
     return false;
@@ -2040,6 +2105,18 @@ namespace Broker {
     for (;;) {
       if (enabled() && Net::online() && !gUp) {
         String pass = Settings::mqttPass();
+        // Proactive pin-on-upgrade: an already-enrolled puck that just upgraded to signed-enroll firmware
+        // has a saved password but has never completed a signed enroll (enrollCtr()==0 -> not yet pinned).
+        // Do a signed enroll of the current password to TOFU-pin K with the broker (idempotent — same
+        // password). Gated on enrollCtr() (committed ONLY on a successful enroll), so a FAILED attempt
+        // retries on the next reconnect instead of leaving the device unpinned forever (a healthy device on
+        // its old password never hits the state=4/5 self-heal); the first success sets enrollCtr>0 and ends
+        // it. (Fresh pucks have no password and pin via enrollOnce() below.)
+        if (pass.length() && Settings::enrollCtr() == 0
+            && enrollConfigured() && ClockService::synced()) {
+          if (enrollPost(pass))
+            Serial.printf("[enroll] pinned key on upgrade for %s\n", Friends::myCode().c_str());
+        }
         // A password typed in the Settings portal is device-side only (the portal had no internet in
         // SoftAP mode). Once we're online, register it with the broker via the enroll endpoint so both
         // ends match — no manual mosquitto_passwd needed. Clears the flag on success.

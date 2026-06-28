@@ -16,6 +16,11 @@ Environment=PLANEPUCK_PASSWD_FILE=/etc/mosquitto/passwd
 # fails with MQTT state=5. The quotes preserve the full command.
 Environment="PLANEPUCK_RELOAD_CMD=systemctl reload mosquitto"
 Environment=PLANEPUCK_BIND=127.0.0.1:8090
+# TOFU key-pin store (root-only; the service writes it atomically). Maps friend code -> per-device key,
+# so after a code's first enroll only that device can change its password. Default matches the script.
+Environment=PLANEPUCK_PIN_FILE=/etc/planepuck/enroll-keys.json
+# Once the whole fleet runs signed-enroll firmware, uncomment to REJECT all unsigned/legacy enrolls:
+# Environment=PLANEPUCK_REQUIRE_SIG=1
 # The enroll token is the ONLY secret — keep it out of this unit; put it in a root-only env file:
 #   /etc/planepuck/enroll.env   ->   PLANEPUCK_ENROLL_TOKEN=<same value as ENROLL_TOKEN in config.h>
 #   chmod 600 /etc/planepuck/enroll.env
@@ -27,7 +32,7 @@ RestartSec=2
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=full
-ReadWritePaths=/etc/mosquitto
+ReadWritePaths=/etc/mosquitto /etc/planepuck   # passwd file + the TOFU pin store (ProtectSystem=full else RO)
 ProtectHome=true
 PrivateTmp=true
 

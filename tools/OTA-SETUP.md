@@ -344,6 +344,8 @@ sudo install -m 755 tools/enroll-server.py /opt/planepuck/enroll-server.py
 sudo install -d -m 700 /etc/planepuck
 printf 'PLANEPUCK_ENROLL_TOKEN=%s\n' "<your-token>" | sudo tee /etc/planepuck/enroll.env >/dev/null
 sudo chmod 600 /etc/planepuck/enroll.env
+sudo touch /etc/planepuck/enroll-keys.json   # TOFU key-pin store (root-only; the service writes it atomically)
+sudo chmod 600 /etc/planepuck/enroll-keys.json
 sudo install -m 644 tools/planepuck-enroll.service /etc/systemd/system/planepuck-enroll.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now planepuck-enroll
@@ -385,18 +387,46 @@ keeps only `sudo` and the broker never reloads → silent enroll, every login fa
 change `ReadWritePaths=/etc/mosquitto` to the passwd file as needed.
 
 ## Security model (read this)
-- The token only authorizes **enrollment** (set the password for a friend code) — nothing else. It is
-  **compiled into the firmware**, and the firmware is downloadable (OTA `.bin` + the installer's merged
-  `.bin`), so treat the token as **semi-public**: rate-limit `/enroll` and **rotate the token once the
-  fleet is provisioned** (re-flash with a new one — existing passwords keep working; rotation only
-  stops *new* enrollments).
-- Worst case with a leaked token: someone registers a password for a code they don't own and connects
-  as it (snoop/impersonate that one inbox). The per-device `%u` ACL still confines each account to its
-  own `puck/<code>/#`, and the app-layer friend-drop still hides emotes from non-friends.
-- Enrollment is idempotent + self-healing: `mosquitto_passwd -b` overwrites, so a puck that loses NVS
-  just re-enrolls a fresh password and reconnects.
-- Rate limiting: the service has a coarse global limiter; for per-IP limits use the caddy-ratelimit
-  plugin or fail2ban on its `journalctl -u planepuck-enroll` "bad or missing token" lines.
+Enrollment is **TOFU key-pinned + signed**. Each puck generates a per-device HMAC key `K` (256-bit) on
+first boot, stored only in NVS, and **signs** every enroll request (`sig = HMAC-SHA256(K, code\npw\nctr)`).
+The server pins `{key, ctr}` per friend code on the **first** enroll; afterwards it only accepts a request
+**signed by that pinned key**, with a strictly-increasing counter. The pin store is `/etc/planepuck/enroll-keys.json`
+(root-only).
+- **What the shared token is now**: just a coarse gate + rate-limit/fail2ban anchor — it no longer
+  authorizes setting *any* code's password. So even though it's **compiled into the (downloadable)
+  firmware** and thus semi-public, a leaked token can no longer reset an already-enrolled puck: that needs
+  `K`, which is per-device and never in the shared binary. Still worth rotating post-provisioning.
+- **What a leaked token *can* still do (residual TOFU race)**: pre-pin a code that has **never enrolled**,
+  *before* that device's first boot (the attacker would need to know its MAC and beat it to `/enroll`).
+  Bounds: the token gate + rate-limiting slow it, the `%u` ACL confines each account to `puck/<code>/#`,
+  and the operator can **unpin** to recover. This shrinks exposure from "any code, any time" to "only
+  never-yet-enrolled codes, before first boot." Fully closing it needs factory key provisioning
+  (flash-encryption / DS-peripheral), which was rejected to keep the web installer working.
+- **Replay**: the strictly-increasing `ctr` rejects a replayed signed request (HTTPS already prevents capture).
+- **Re-flash / full-erase recovery**: OTA and a normal USB app-flash keep NVS, so `K` survives and the puck
+  reconnects with no re-enroll. A full `erase_flash` wipes `K` → the device makes a new `K` → the server sees
+  a **key mismatch** for the pinned code and returns **403**. Run the **unpin** below, then it re-TOFUs on its
+  next connect cycle:
+  ```bash
+  # list pinned codes:
+  sudo python3 -c "import json;print('\n'.join(json.load(open('/etc/planepuck/enroll-keys.json'))))"
+  # unpin ONE code (replace 00F93030) so an erased/re-flashed puck can re-pin:
+  sudo python3 - <<'EOF'
+  import json,os; f="/etc/planepuck/enroll-keys.json"
+  p=json.load(open(f)); p.pop("00F93030",None)
+  t=f+".tmp"; json.dump(p,open(os.open(t,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600),"w")); os.replace(t,f)
+  EOF
+  ```
+- **Migration (no flag day)**: the server starts with `PLANEPUCK_REQUIRE_SIG=0` — already-deployed
+  old-firmware pucks keep working with their existing passwords (legacy *unsigned* enrolls are accepted for
+  unpinned codes and **not** pinned). Each puck TOFU-pins itself the first time it sends a signed enroll
+  (its proactive pin-on-upgrade on the first boot of the new firmware). Once `journalctl -u planepuck-enroll`
+  shows the whole fleet has produced signed enrolls, set `PLANEPUCK_REQUIRE_SIG=1` in the unit + restart to
+  **reject all unsigned** enrolls. Recover a stuck unit via the captive-portal MQTT-password override.
+- **Rate limiting**: the service has a coarse global limiter; for per-IP limits use the caddy-ratelimit
+  plugin or fail2ban on its `journalctl -u planepuck-enroll` "bad or missing token" / "rejected:" lines.
+- **Back up** `/etc/planepuck/enroll-keys.json` alongside `enroll.env`: losing it re-opens the TOFU window
+  (every device re-pins its genuine `K` on the next signed enroll, which is benign for real devices).
 
 ---
 

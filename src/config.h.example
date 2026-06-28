@@ -88,10 +88,12 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 // password, POSTs {"code","pw"} over HTTPS to ENROLL_URL with an "Authorization: Bearer ENROLL_TOKEN"
 // header; the droplet registers it in Mosquitto (mosquitto_passwd) and the puck stores it in NVS and
 // connects — nobody ever types an MQTT password. Blank ENROLL_URL = off (use the captive-portal field).
-// The TOKEN only authorizes ENROLLMENT (not message traffic) and it ends up in the binary, so
-// rate-limit it server-side and rotate it once your fleet is provisioned. HTTPS is verified against
-// MQTT_CA_CERT above (the endpoint sits on your droplet behind Caddy). Server side + flow:
-// tools/enroll-server.py and tools/OTA-SETUP.md ("Zero-touch enrollment").
+// Enrollment is TOFU key-pinned + SIGNED: the puck generates a per-device HMAC key K (NVS-only, never in
+// the shared binary) and signs each request; the server pins K per code on first enroll, so afterwards
+// only that device can change its password. The TOKEN is therefore just a coarse gate (it still ends up
+// in the binary — semi-public — so rate-limit + rotate it), NOT the sole authority. HTTPS is verified
+// against MQTT_CA_CERT above (endpoint on your droplet behind Caddy). Server side + the full security
+// model (TOFU race, unpin recovery, REQUIRE_SIG migration): tools/enroll-server.py + tools/OTA-SETUP.md.
 // Must match the token configured on the enroll server. Generate one with: openssl rand -hex 32
 #define ENROLL_URL    ""   // e.g. "https://__FW_HOST__/enroll"  ("" = no self-enroll)
 #define ENROLL_TOKEN  ""   // shared enroll secret (server checks it); blank when ENROLL_URL is blank
