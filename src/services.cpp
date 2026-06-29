@@ -2131,7 +2131,7 @@ namespace Broker {
         } else {
           // client id is unique per chip; username = friend code (for broker %u ACLs); password is
           // the per-device secret from NVS (self-enrolled or typed in Settings, never compiled in).
-          String cid  = String(DEVICE_ID) + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+          String cid  = String(DEVICE_ID) + "-" + Friends::myCode();   // unique per chip (was a truncated MAC -> batch dups collided + kicked each other off the broker)
           String user = Friends::myCode();
           { WiFiClient probe; uint32_t t0 = millis();                                  // USB diag: raw TCP reach to the broker (no TLS)
             bool tcp = probe.connect(MQTT_HOST, MQTT_PORT, 4000); probe.stop();
@@ -2298,8 +2298,13 @@ namespace Friends {
   static void clearRetained(const String& topic) { Broker::publish(topic, "", true); }
 
   void begin() {
-    uint32_t low = (uint32_t)ESP.getEfuseMac();        // stable, unique per chip
-    char buf[9]; snprintf(buf, sizeof(buf), "%08X", low);
+    // Friend code = device identity (MQTT username, enroll-pin key, friend id) -> MUST be unique per chip.
+    // ESP.getEfuseMac() is the 48-bit factory MAC; its LOW 32 bits are the vendor OUI + only ONE unique
+    // byte, so two chips from the same batch (sharing the first 4 MAC bytes) would get the SAME code. Fold
+    // all 48 bits into 32 so the unique high bytes (mac[4]/mac[5]) contribute -> distinct chips, distinct codes.
+    uint64_t mac = ESP.getEfuseMac();
+    uint32_t id  = (uint32_t)mac ^ (uint32_t)(mac >> 32);
+    char buf[9]; snprintf(buf, sizeof(buf), "%08X", id);
     gCode = String(buf);
     loadList();
     Broker::subscribe("puck/" + gCode + "/#");         // single wildcard inbox
